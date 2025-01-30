@@ -14,4 +14,6 @@ def convolve(arr, kernel):
     return output
 
 
-print(convolve([10, 50, 60, 10, 20, 30, 40], [1 / 3, 1 / 3, 1 / 3]))
+# print(convolve([10, 50, 60, 10, 20, 30, 40], [1 / 3, 1 / 3, 1 / 3]))
+
+print(convolve([60, 60, 60, 60, 60, 60, 60], [0.3, 0.3, 0.3]))
