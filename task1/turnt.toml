@@ -1,0 +1,4 @@
+# unfortunately, my installation is weird so i have to point to the /.local 
+# directory instead of just invoking bril2json. i'll try and fix this for next time
+
+command = "dune build && /Users/parthsarkar/.local/bin/bril2json < {filename} | dune exec bin/main.exe"

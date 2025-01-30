@@ -1,3 +1,5 @@
+(* This file provides functions that do the Basic Block and CFG constructions requested in Task 1*)
+
 module CFG = Map.Make (Int)
 module LabelsToId = Map.Make (String)
 module IdToLabels = Map.Make (Int)
@@ -6,19 +8,19 @@ module IdToLabels = Map.Make (Int)
     instructions [body] that represents a Bril program (within a function, not
     across functions). *)
 let form_blocks (body : Bril.Instr.t list) : Bril.Instr.t list list =
-  let final_block, other_blocks =
-    List.fold_left
-      (fun (curr_block, other_blocks) inst ->
-        match inst with
-        (* if label, append current basic block to others and make header of new basic block the label *)
-        | Bril.Instr.Label _ -> ([ inst ], List.rev curr_block :: other_blocks)
-        (* if non-call control insn, then append to current block and append to other blocks *)
-        | Bril.Instr.Ret _ | Bril.Instr.Br _ | Bril.Instr.Jmp _ ->
-            ([], List.rev (inst :: curr_block) :: other_blocks)
-        (* if normal insn, then simply append to current basic block*)
-        | _ -> (inst :: curr_block, other_blocks))
-      ([], []) body
-  in
+  body
+  |> List.fold_left
+       (fun (curr_block, other_blocks) inst ->
+         match inst with
+         (* if label, append current basic block to others and make header of new basic block the label *)
+         | Bril.Instr.Label _ -> ([ inst ], List.rev curr_block :: other_blocks)
+         (* if non-call control insn, then append to current block and append to other blocks *)
+         | Bril.Instr.Ret _ | Bril.Instr.Br _ | Bril.Instr.Jmp _ ->
+             ([], List.rev (inst :: curr_block) :: other_blocks)
+         (* if normal insn, then simply append to current basic block*)
+         | _ -> (inst :: curr_block, other_blocks))
+       ([], [])
+  |> fun (final_block, other_blocks) ->
   (* need to form the remaining instructions that don't have a terminator 
 into another block; also, get rid of any empty blocks. *)
   List.rev final_block :: other_blocks
@@ -30,7 +32,8 @@ into another block; also, get rid of any empty blocks. *)
     basic block, and the other map does the opposite. Each element of the list
     [blocks] is a 3-tuple, whose first element is that block's Id and whose
     third element is the block itself. *)
-let label_to_id (blocks : (int * Bril.Instr.t * Bril.Instr.t list) list) :
+let label_to_id :
+    (int * Bril.Instr.t * Bril.Instr.t list) list ->
     int LabelsToId.t * string IdToLabels.t =
   List.fold_left
     (fun (label_to_id, id_to_labels) (id, _, block) ->
@@ -39,18 +42,16 @@ let label_to_id (blocks : (int * Bril.Instr.t * Bril.Instr.t list) list) :
           (LabelsToId.add lbl id label_to_id, IdToLabels.add id lbl id_to_labels)
       | _ -> (label_to_id, id_to_labels))
     (LabelsToId.empty, IdToLabels.empty)
-    blocks
 
 (** From a list of instructions, construct the basic blocks of the program and
     form them into a control-flow graph. The CFG data structure is simply a map
     from an (integer) Id of a basic block to the Id of any basic blocks that are
     immediate successors to the current one. *)
 let construct_cfg (body : Bril.Instr.t list) : (string * string list) list =
-  let enumerated_blocks =
-    body |> form_blocks
-    (* collect each basic block with its index and final instruction*)
-    |> List.mapi (fun i block -> (i, block |> List.rev |> List.hd, block))
-  in
+  body |> form_blocks
+  |> List.mapi (fun i block -> (i, block |> List.rev |> List.hd, block))
+  (* collect each basic block with its index and final instruction*)
+  |> fun enumerated_blocks ->
   (* Maps from label to id and vice versa*)
   let label_to_id_map, id_to_label_map = label_to_id enumerated_blocks in
   (* The first integer id that should not be a successor (b/c it doesn't exist!) *)
