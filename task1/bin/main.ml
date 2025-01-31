@@ -30,4 +30,10 @@ let _basic_analysis_to_stdout () =
   () |> Task1.Basic_analysis.analyze_num_constants |> Int.to_string
   |> Out_channel.output_string Out_channel.stdout
 
-let () = _basic_analysis_to_stdout ()
+let _test_tdce () =
+  In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
+  |> Bril.from_json |> Task1.Tdce.elim_global_unused_assigns |> Bril.to_json
+  |> Yojson.Basic.to_string
+  |> Out_channel.output_string Out_channel.stdout
+
+let () = _test_tdce ()
