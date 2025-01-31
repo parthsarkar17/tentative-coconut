@@ -26,8 +26,8 @@ let _print_bb_cfg () =
   print_newline ()
 
 (** displays the output of the small analysis to stdout*)
-let basic_analysis_to_stdout () =
+let _basic_analysis_to_stdout () =
   () |> Task1.Basic_analysis.analyze_num_constants |> Int.to_string
   |> Out_channel.output_string Out_channel.stdout
 
-let () = basic_analysis_to_stdout ()
+let () = _basic_analysis_to_stdout ()
