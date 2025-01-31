@@ -1,8 +1,10 @@
 @main {
-  a: int = const 100;
-  b: bool = const true;
-  a: int = const 42;
-  b: bool = const false;
-  print b;
-  print a;
+
+  a: int = const 1;
+  b: int = const 2;
+  c: int = add a b;
+  c: int = const 42;
+  a: int = const 36;
+  b: int = id b;
+  print c;
 }

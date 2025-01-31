@@ -1,4 +1,0 @@
-(executable
- (public_name task1)
- (name main)
- (libraries task1 bril yojson))

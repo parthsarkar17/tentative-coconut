@@ -79,7 +79,7 @@ let rec converge_basic_block (block : Bril.Instr.t list) : Bril.Instr.t list =
   |> List.fold_left
        (fun ((i, map, to_delete) : int * int VariableMap.t * InstructionSet.t)
             (instr : Bril.Instr.t) ->
-         (* discard all bindings whose keys are used as an argument *)
+         (* in this new map, discard all bindings whose keys are used as an argument *)
          let map_post_removal =
            match instr with
            | Bril.Instr.Unary (_, _, arg)
@@ -106,7 +106,8 @@ let rec converge_basic_block (block : Bril.Instr.t list) : Bril.Instr.t list =
                |> List.fold_left (fun acc arg -> VariableMap.remove arg acc) map
            | _ -> map
          in
-         (* delete instruction that is overwritten, if it exists *)
+         (* delete instruction that is overwritten (if it exists) and update/insert 
+          a new value for the key representing the destination variable name *)
          let map_post_addition, to_delete =
            match instr with
            | Bril.Instr.Const (dst, _)
@@ -118,17 +119,14 @@ let rec converge_basic_block (block : Bril.Instr.t list) : Bril.Instr.t list =
            | Bril.Instr.PtrAdd (dst, _, _) -> (
                let dst_name = fst dst in
                ( VariableMap.add dst_name i map_post_removal,
-                 match VariableMap.find_opt dst_name map with
+                 match VariableMap.find_opt dst_name map_post_removal with
                  | None -> to_delete
                  | Some prev_i ->
                      changed_something := true;
                      InstructionSet.add prev_i to_delete ))
            | _ -> (map_post_removal, to_delete)
          in
-         (i + 1, map_post_addition, to_delete)
-         (* next, delete instructions that are overwritten; the assumption is,
-          if the instruction currently exists in the set, it is not used before it 
-          is reassigned by the current instruction. that's why we are allowed to remove it *))
+         (i + 1, map_post_addition, to_delete))
        (0, VariableMap.empty, InstructionSet.empty)
   |> fun (_, _, to_delete) ->
   block
@@ -139,7 +137,8 @@ let rec converge_basic_block (block : Bril.Instr.t list) : Bril.Instr.t list =
   |> if !changed_something then converge_basic_block else fun x -> x
 
 (** [elim_locally_killed_assigns] calls [converge_basic_block] on every basic
-    block it finds in a bril program. *)
+    block it finds in a bril program. This is the function that implements local
+    dead code elimination. *)
 let elim_locally_killed_assigns : Bril.t -> Bril.t =
   List.map (fun (func : Bril.Func.t) ->
       func |> Bril.Func.instrs |> Cfg.form_blocks
