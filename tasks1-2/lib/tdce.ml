@@ -63,15 +63,18 @@ let rec elim_global_unused_assigns (prog : Bril.t) : Bril.t =
          let instrs = Bril.Func.instrs func in
          instrs
          |> List.fold_left
-              (fun (used : Bril.Instr.arg list) (instr : Bril.Instr.t) ->
+              (fun (used : ArgumentSet.t) (instr : Bril.Instr.t) ->
                 (* enumerate instructions and add arguments to a set of used variables*)
                 match get_instr_args instr with
                 | None -> used
-                | One arg -> arg :: used
-                | Two (arg1, arg2) -> arg1 :: arg2 :: used
-                | List args -> args @ used)
-              []
-         |> ArgumentSet.of_list
+                | One arg -> ArgumentSet.add arg used
+                | Two (arg1, arg2) ->
+                    used |> ArgumentSet.add arg1 |> ArgumentSet.add arg2
+                | List args ->
+                    List.fold_left
+                      (fun acc arg -> ArgumentSet.add arg acc)
+                      used args)
+              ArgumentSet.empty
          |> fun (used : ArgumentSet.t) ->
          instrs
          (* delete instructions that have unused destination variables *)
