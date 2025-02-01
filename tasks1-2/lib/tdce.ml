@@ -20,6 +20,34 @@ let get_instr_dest : Bril.Instr.t -> Bril.Dest.t option = function
       Some dst
   | _ -> None
 
+(** A type to enumerate the kinds of arguments that Bril instructions have *)
+type instr_arg_fmt =
+  | None
+  | One of Bril.Instr.arg
+  | Two of Bril.Instr.arg * Bril.Instr.arg
+  | List of Bril.Instr.arg list
+
+(** [get_instr_args instr] is a `instr_arg_fmt` value representing the arguments
+    used in [instr] *)
+let get_instr_args : Bril.Instr.t -> instr_arg_fmt = function
+  | Bril.Instr.Unary (_, _, arg)
+  | Bril.Instr.Br (arg, _, _)
+  | Bril.Instr.Guard (arg, _)
+  | Bril.Instr.Alloc (_, arg)
+  | Bril.Instr.Free arg
+  | Bril.Instr.Load (_, arg) ->
+      One arg
+  | Bril.Instr.Binary (_, _, arg1, arg2)
+  | Bril.Instr.Store (arg1, arg2)
+  | Bril.Instr.PtrAdd (_, arg1, arg2) ->
+      Two (arg1, arg2)
+  | Bril.Instr.Call (_, _, arg_list) | Bril.Instr.Print arg_list ->
+      List arg_list
+  | Bril.Instr.Phi (_, labeled_args) -> List (List.map snd labeled_args)
+  | Bril.Instr.Ret arg_opt -> (
+      match arg_opt with None -> None | Some arg -> One arg)
+  | _ -> None
+
 (** Implements global dead code elimination. [input_prog] is the bril program
     we're operating on. If we removed some instructions in one iteration, it's
     important to check if any other instructions have become dead in the next
@@ -37,26 +65,11 @@ let rec elim_global_unused_assigns (prog : Bril.t) : Bril.t =
          |> List.fold_left
               (fun (used : Bril.Instr.arg list) (instr : Bril.Instr.t) ->
                 (* enumerate instructions and add arguments to a set of used variables*)
-                match instr with
-                | Bril.Instr.Unary (_, _, arg)
-                | Bril.Instr.Br (arg, _, _)
-                | Bril.Instr.Guard (arg, _)
-                | Bril.Instr.Alloc (_, arg)
-                | Bril.Instr.Free arg
-                | Bril.Instr.Load (_, arg) ->
-                    arg :: used
-                | Bril.Instr.Binary (_, _, arg1, arg2)
-                | Bril.Instr.Store (arg1, arg2)
-                | Bril.Instr.PtrAdd (_, arg1, arg2) ->
-                    arg1 :: arg2 :: used
-                | Bril.Instr.Call (_, _, arg_list) | Bril.Instr.Print arg_list
-                  ->
-                    arg_list @ used
-                | Bril.Instr.Ret arg_opt -> (
-                    match arg_opt with None -> used | Some arg -> arg :: used)
-                | Bril.Instr.Phi (_, labeled_args) ->
-                    labeled_args |> List.map snd |> ( @ ) used
-                | _ -> used)
+                match get_instr_args instr with
+                | None -> used
+                | One arg -> arg :: used
+                | Two (arg1, arg2) -> arg1 :: arg2 :: used
+                | List args -> args @ used)
               []
          |> ArgumentSet.of_list
          |> fun (used : ArgumentSet.t) ->
@@ -64,13 +77,13 @@ let rec elim_global_unused_assigns (prog : Bril.t) : Bril.t =
          (* delete instructions that have unused destination variables *)
          |> List.filter (fun (instr : Bril.Instr.t) ->
                 match get_instr_dest instr with
+                (* of course, keep all instructions that don't have destinations *)
                 | None -> true
                 | Some (dst_name, _) ->
                     let inst_used = ArgumentSet.mem dst_name used in
                     (* set flag if we transformed the code *)
                     if not inst_used then changed_something := true else ();
-                    inst_used
-                (* of course, keep all instructions that don't have destinations *))
+                    inst_used)
          |> Bril.Func.set_instrs func)
   |> fun (transformed_prog : Bril.t) ->
   if !changed_something then elim_global_unused_assigns transformed_prog
@@ -87,45 +100,26 @@ let rec converge_basic_block (block : Bril.Instr.t list) : Bril.Instr.t list =
        (fun ((i, map, to_delete) : int * int VariableMap.t * InstructionSet.t)
             (instr : Bril.Instr.t) ->
          (* in this new map, discard all bindings whose keys are used as an argument *)
-         let map_post_removal =
-           match instr with
-           | Bril.Instr.Unary (_, _, arg)
-           | Bril.Instr.Br (arg, _, _)
-           | Bril.Instr.Guard (arg, _)
-           | Bril.Instr.Alloc (_, arg)
-           | Bril.Instr.Free arg
-           | Bril.Instr.Load (_, arg) ->
-               VariableMap.remove arg map
-           | Bril.Instr.Binary (_, _, arg1, arg2)
-           | Bril.Instr.Store (arg1, arg2)
-           | Bril.Instr.PtrAdd (_, arg1, arg2) ->
-               map |> VariableMap.remove arg1 |> VariableMap.remove arg2
-           | Bril.Instr.Call (_, _, arg_list) | Bril.Instr.Print arg_list ->
-               List.fold_left
-                 (fun acc arg -> VariableMap.remove arg acc)
-                 map arg_list
-           | Bril.Instr.Ret arg_opt -> (
-               match arg_opt with
-               | None -> map
-               | Some arg -> VariableMap.remove arg map)
-           | Bril.Instr.Phi (_, labeled_args) ->
-               labeled_args |> List.map snd
-               |> List.fold_left (fun acc arg -> VariableMap.remove arg acc) map
-           | _ -> map
-         in
+         (match get_instr_args instr with
+         | None -> map
+         | One arg -> VariableMap.remove arg map
+         | Two (arg1, arg2) ->
+             map |> VariableMap.remove arg1 |> VariableMap.remove arg2
+         | List args ->
+             List.fold_left (fun acc arg -> VariableMap.remove arg acc) map args)
+         |> fun map_post_removal ->
          (* delete instruction that is overwritten (if it exists) and update/insert 
           a new value for the key representing the destination variable name *)
-         let map_post_addition, to_delete =
-           match get_instr_dest instr with
-           | None -> (map_post_removal, to_delete)
-           | Some (dst_name, _) ->
-               ( VariableMap.add dst_name i map_post_removal,
-                 match VariableMap.find_opt dst_name map_post_removal with
-                 | None -> to_delete
-                 | Some prev_i ->
-                     changed_something := true;
-                     InstructionSet.add prev_i to_delete )
-         in
+         (match get_instr_dest instr with
+         | None -> (map_post_removal, to_delete)
+         | Some (dst_name, _) ->
+             ( VariableMap.add dst_name i map_post_removal,
+               match VariableMap.find_opt dst_name map_post_removal with
+               | None -> to_delete
+               | Some prev_i ->
+                   changed_something := true;
+                   InstructionSet.add prev_i to_delete ))
+         |> fun (map_post_addition, to_delete) ->
          (i + 1, map_post_addition, to_delete))
        (0, VariableMap.empty, InstructionSet.empty)
   |> fun (_, _, to_delete) ->
