@@ -6,6 +6,20 @@ module VariableMap = Map.Make (String)
     every recursive call. *)
 let create_flag () : bool ref = ref false
 
+(** [get_instr_dest instr] is an option wrapping the destination field of an
+    instruction. Optional because not every instruction has a destination (e.g.
+    `print`) *)
+let get_instr_dest : Bril.Instr.t -> Bril.Dest.t option = function
+  | Bril.Instr.Const (dst, _)
+  | Bril.Instr.Binary (dst, _, _, _)
+  | Bril.Instr.Unary (dst, _, _)
+  | Bril.Instr.Phi (dst, _)
+  | Bril.Instr.Alloc (dst, _)
+  | Bril.Instr.Load (dst, _)
+  | Bril.Instr.PtrAdd (dst, _, _) ->
+      Some dst
+  | _ -> None
+
 (** Implements global dead code elimination. [input_prog] is the bril program
     we're operating on. If we removed some instructions in one iteration, it's
     important to check if any other instructions have become dead in the next
@@ -49,21 +63,14 @@ let rec elim_global_unused_assigns (prog : Bril.t) : Bril.t =
          instrs
          (* delete instructions that have unused destination variables *)
          |> List.filter (fun (instr : Bril.Instr.t) ->
-                (* lay out cases where destination exists, and determine if it's used *)
-                match instr with
-                | Bril.Instr.Const (dst, _)
-                | Bril.Instr.Binary (dst, _, _, _)
-                | Bril.Instr.Unary (dst, _, _)
-                | Bril.Instr.Phi (dst, _)
-                | Bril.Instr.Alloc (dst, _)
-                | Bril.Instr.Load (dst, _)
-                | Bril.Instr.PtrAdd (dst, _, _) ->
-                    let inst_used = ArgumentSet.mem (fst dst) used in
+                match get_instr_dest instr with
+                | None -> true
+                | Some (dst_name, _) ->
+                    let inst_used = ArgumentSet.mem dst_name used in
                     (* set flag if we transformed the code *)
                     if not inst_used then changed_something := true else ();
                     inst_used
-                (* of course, keep all instructions that don't have destinations *)
-                | _ -> true)
+                (* of course, keep all instructions that don't have destinations *))
          |> Bril.Func.set_instrs func)
   |> fun (transformed_prog : Bril.t) ->
   if !changed_something then elim_global_unused_assigns transformed_prog
@@ -109,22 +116,15 @@ let rec converge_basic_block (block : Bril.Instr.t list) : Bril.Instr.t list =
          (* delete instruction that is overwritten (if it exists) and update/insert 
           a new value for the key representing the destination variable name *)
          let map_post_addition, to_delete =
-           match instr with
-           | Bril.Instr.Const (dst, _)
-           | Bril.Instr.Binary (dst, _, _, _)
-           | Bril.Instr.Unary (dst, _, _)
-           | Bril.Instr.Phi (dst, _)
-           | Bril.Instr.Alloc (dst, _)
-           | Bril.Instr.Load (dst, _)
-           | Bril.Instr.PtrAdd (dst, _, _) -> (
-               let dst_name = fst dst in
+           match get_instr_dest instr with
+           | None -> (map_post_removal, to_delete)
+           | Some (dst_name, _) ->
                ( VariableMap.add dst_name i map_post_removal,
                  match VariableMap.find_opt dst_name map_post_removal with
                  | None -> to_delete
                  | Some prev_i ->
                      changed_something := true;
-                     InstructionSet.add prev_i to_delete ))
-           | _ -> (map_post_removal, to_delete)
+                     InstructionSet.add prev_i to_delete )
          in
          (i + 1, map_post_addition, to_delete))
        (0, VariableMap.empty, InstructionSet.empty)
