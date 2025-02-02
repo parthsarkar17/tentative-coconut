@@ -26,7 +26,7 @@ module FunctionVariables = struct
     func |> Bril.Func.instrs
     |> List.fold_left
          (fun cur_max instr ->
-           match Tdce.get_instr_dest instr with
+           match Bril.Instr.dest instr with
            | None -> cur_max
            | Some (dst, _) ->
                dst
@@ -43,8 +43,7 @@ module FunctionVariables = struct
                       | '7' -> Some 7
                       | '8' -> Some 9
                       | _ -> None)
-                      |> fun digit_opt ->
-                      match digit_opt with
+                      |> function
                       | None -> (Int.max instr_cur_max num_contiguous_digits, 0)
                       | Some digit ->
                           (instr_cur_max, (num_contiguous_digits * 10) + digit))
@@ -61,6 +60,30 @@ end
 module Table = Map.Make (Int)
 module Var2Num = Map.Make (String)
 
+(** [op instr] is a string representation of the "op code" for an instruction *)
+let op : Bril.Instr.t -> string =
+  let open Bril.Instr in
+  function
+  | Label _ -> "label"
+  | Const _ -> "const"
+  | Binary (_, op, _, _) -> Bril.Op.Binary.to_string op
+  | Unary (_, op, _) -> Bril.Op.Unary.to_string op
+  | Jmp _ -> "jmp"
+  | Br _ -> "br"
+  | Call _ -> "call"
+  | Ret _ -> "ret"
+  | Print _ -> "print"
+  | Nop -> "nop"
+  | Phi _ -> "phi"
+  | Speculate -> "spec"
+  | Commit -> "commit"
+  | Guard _ -> "guard"
+  | Alloc _ -> "alloc"
+  | Free _ -> "free"
+  | Store _ -> "store"
+  | Load _ -> "load"
+  | PtrAdd _ -> "ptradd"
+
 let lvn : Bril.t -> Bril.t =
   List.map (fun (func : Bril.Func.t) ->
       func |> Bril.Func.instrs |> Cfg.form_blocks
@@ -70,9 +93,35 @@ let lvn : Bril.t -> Bril.t =
                   (* for every instruction, transform according to LVN *)
                   (fun ((block_instrs, table, cloud) :
                          Bril.Instr.t list
-                         * (Value.t * Bril.Instr.arg) Table.t
+                         * (Value.t option * Bril.Instr.arg) Table.t
                          * int Var2Num.t) (instr : Bril.Instr.t) ->
-                    (block_instrs, table, cloud))
+                    let value : Value.t option =
+                      instr |> Bril.Instr.args
+                      |> List.map (fun arg -> Var2Num.find arg cloud)
+                      |> List.sort Int.compare (* canonicalize arguments *)
+                      |> function
+                      | [] -> None
+                      | lst -> Some (Value.init (op instr) lst)
+                    in
+                    (* find the binding in table that matches value *)
+                    match
+                      Table.fold
+                        (fun id (existing_value, var) acc ->
+                          match acc with
+                          | Some _ -> acc
+                          | None -> (
+                              match (existing_value, value) with
+                              | None, _ | _, None -> None
+                              | Some v1, Some v2 ->
+                                  if Value.( = ) v1 v2 then
+                                    Some (id, existing_value, var)
+                                  else None))
+                        table None
+                    with
+                    (* if the binding already exists *)
+                    | Some _ -> (block_instrs, table, cloud)
+                    (* if the binding doesn't exist yet *)
+                    | None -> (block_instrs, table, cloud))
                   ([], Table.empty, Var2Num.empty)
              |> fun (x, _, _) -> List.rev x)
       |> List.concat |> Bril.Func.set_instrs func)
