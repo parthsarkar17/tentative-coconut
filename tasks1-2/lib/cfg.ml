@@ -24,7 +24,7 @@ let form_blocks (body : Bril.Instr.t list) : Bril.Instr.t list list =
   (* need to form the remaining instructions that don't have a terminator 
 into another block; also, get rid of any empty blocks. *)
   List.rev final_block :: other_blocks
-  |> List.filter (fun lst -> lst |> List.is_empty |> not)
+  |> List.filter (function [] -> false | _ -> true)
   |> List.rev
 
 (** [label_to_id blocks] gives two maps: one map takes a label (at the head of

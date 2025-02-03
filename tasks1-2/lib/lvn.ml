@@ -84,6 +84,15 @@ let op : Bril.Instr.t -> string =
   | Load _ -> "load"
   | PtrAdd _ -> "ptradd"
 
+(** [instr_for_lvn instr] determines whether the instruction [instr] can be
+    added to the LVN table *)
+let instr_for_lvn instr =
+  let open Bril.Instr in
+  match instr with
+  | Binary (dest, op, arg1, arg2) -> ()
+  | Unary (dest, op, arg) -> ()
+  | _ -> ()
+
 let lvn : Bril.t -> Bril.t =
   List.map (fun (func : Bril.Func.t) ->
       func |> Bril.Func.instrs |> Cfg.form_blocks
@@ -95,7 +104,7 @@ let lvn : Bril.t -> Bril.t =
                          Bril.Instr.t list
                          * (Value.t option * Bril.Instr.arg) Table.t
                          * int Var2Num.t) (instr : Bril.Instr.t) ->
-                    let value : Value.t option =
+                    let value_opt : Value.t option =
                       instr |> Bril.Instr.args
                       |> List.map (fun arg -> Var2Num.find arg cloud)
                       |> List.sort Int.compare (* canonicalize arguments *)
@@ -104,24 +113,42 @@ let lvn : Bril.t -> Bril.t =
                       | lst -> Some (Value.init (op instr) lst)
                     in
                     (* find the binding in table that matches value *)
-                    match
+                    let canonical_var_opt =
                       Table.fold
-                        (fun id (existing_value, var) acc ->
+                        (fun _ (existing_value, var) acc ->
                           match acc with
+                          (* if you found it, keep passing it along *)
                           | Some _ -> acc
+                          (* if you didn't find it yet, see if the current binding works *)
                           | None -> (
-                              match (existing_value, value) with
+                              match (existing_value, value_opt) with
                               | None, _ | _, None -> None
-                              | Some v1, Some v2 ->
-                                  if Value.( = ) v1 v2 then
-                                    Some (id, existing_value, var)
-                                  else None))
+                              | Some (v1 : Value.t), Some (v2 : Value.t) ->
+                                  if Value.( = ) v1 v2 then Some var else None))
                         table None
-                    with
-                    (* if the binding already exists *)
-                    | Some _ -> (block_instrs, table, cloud)
-                    (* if the binding doesn't exist yet *)
-                    | None -> (block_instrs, table, cloud))
+                    in
+                    match (Bril.Instr.dest instr, canonical_var_opt) with
+                    (* For instrs that don't have destinations, just look through
+                      arguments and swap out for any canonical variables *)
+                    | None, _ ->
+                        let optimized_args =
+                          instr |> Bril.Instr.args
+                          |> List.map (fun arg ->
+                                 let num = Var2Num.find arg cloud in
+                                 table |> Table.find num |> snd)
+                        in
+                        ( Bril.Instr.set_args optimized_args instr
+                          :: block_instrs,
+                          table,
+                          cloud )
+                    (* A canonical variable for the value exists *)
+                    | Some dest, Some canonical_var ->
+                        Bril.Instr.Unary (dest, Bril.Op.Unary.Id, canonical_var)
+                        |> fun replaced_instr ->
+                        (replaced_instr :: block_instrs, table, cloud)
+                    (* Value didn't match anything that exists. 
+                      We want to add this to the LVN data structures*)
+                    | Some dest, None -> (block_instrs, table, cloud))
                   ([], Table.empty, Var2Num.empty)
              |> fun (x, _, _) -> List.rev x)
       |> List.concat |> Bril.Func.set_instrs func)
