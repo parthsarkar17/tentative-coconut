@@ -141,6 +141,21 @@ let init_lvn_datastructs (block : Bril.Instr.t list) :
     (Var2Num.empty, Table.empty, 0)
   |> fun (x, y, _) -> (x, y)
 
+(** [canonicalize_arguments instr] is a function that either sorts the arguments
+    of [instr] into a canonical form (to maximize chances that the value has
+    been computed before), or leaves them alone, depending on if the operation
+    is commutative or not. *)
+let canonicalize_arguments =
+  let open Bril.Instr in
+  let open Bril.Op in
+  function
+  | Binary (_, Binary.Add, _, _)
+  | Binary (_, Binary.Mul, _, _)
+  | Binary (_, Binary.And, _, _)
+  | Binary (_, Binary.Or, _, _) ->
+      List.sort Int.compare
+  | _ -> fun x -> x
+
 (** [perform_lvn_on_block] is a pass over a single block to transform it using
     LVN. It features a gigantic [fold_left] that computes the data structures
     and iteratively builds up the basic block with modified instructions. *)
@@ -176,8 +191,8 @@ let perform_lvn_on_block (ptr : FunctionVariables.t ref)
                | other ->
                    other |> args
                    |> List.map (fun arg -> Var2Num.find arg cloud)
-                   |> List.sort Int.compare
                    (* canonicalize arguments *)
+                   |> canonicalize_arguments instr
                    |> fun lst -> Some (Value.init (op instr) lst)
              in
              (* find the binding in table that matches value *)

@@ -32,19 +32,19 @@ let _basic_analysis_to_stdout () =
   () |> Task1.Basic_analysis.analyze_num_constants |> Int.to_string
   |> Out_channel.output_string Out_channel.stdout
 
+let tdce prog =
+  prog |> Task1.Tdce.elim_global_unused_assigns
+  |> Task1.Tdce.elim_locally_killed_assigns
+
 (** run both global and local unused assignment passes *)
 let _test_tdce () =
   In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
-  |> Bril.from_json |> Task1.Tdce.elim_global_unused_assigns
-  |> Task1.Tdce.elim_locally_killed_assigns |> Bril.to_json
-  |> Yojson.Basic.to_string
+  |> Bril.from_json |> tdce |> Bril.to_json |> Yojson.Basic.to_string
   |> Out_channel.output_string Out_channel.stdout
 
 let _test_lvn () =
   In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
-  |> Bril.from_json |> Lvn.lvn |> Task1.Tdce.elim_global_unused_assigns
-  |> Task1.Tdce.elim_locally_killed_assigns |> Bril.to_json
-  |> Yojson.Basic.to_string
+  |> Bril.from_json |> Lvn.lvn |> tdce |> Bril.to_json |> Yojson.Basic.to_string
   |> Out_channel.output_string Out_channel.stdout
 
 let () = _test_lvn ()
