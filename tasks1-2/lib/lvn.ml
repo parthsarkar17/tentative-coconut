@@ -118,6 +118,8 @@ let drop n lst =
 let create_box func = ref (FunctionVariables.init func)
 
 module ArgumentSet = Set.Make (String)
+(** A module wrapping a data type and functions to manipulate a set of
+    arguments. *)
 
 (** [init_lvn_datastructurs block] is a tuple that represents the LVN data
     structures before LVN takes place on [block]; in particular, it will
@@ -171,31 +173,35 @@ let perform_lvn_on_block (ptr : FunctionVariables.t ref)
          (* For instrs that don't have destinations, simply look through
              arguments and swap out for any canonical variables *)
          | None ->
-             let optimized_args =
-               instr |> args
-               |> List.map (fun arg ->
-                      let num = Var2Num.find arg cloud in
-                      table |> Table.find num |> snd)
-             in
-             ( Bril.Instr.set_args optimized_args instr :: block_instrs,
-               table,
-               cloud,
-               instr_index + 1 )
+             instr |> args
+             |> List.map (fun arg ->
+                    let num = Var2Num.find arg cloud in
+                    table |> Table.find num |> snd)
+             |> fun arg_lst ->
+             Bril.Instr.set_args arg_lst instr |> fun transformed_instr ->
+             (transformed_instr :: block_instrs, table, cloud, instr_index + 1)
          (* Here, the destination does exist. Now, we can proceed with LVN. *)
          | Some dest ->
-             (* only instructions that have a destination and are not consts
-                 or phis can have a non-None value in the table *)
+             (* Choose the instructions that should be guaranteed their own values 
+             and shouldn't point to any other canonical value (ie. when value_opt = None). These include constants and pointer-producing expressions. 
+             For pointers, this is desired behavior because we don't want to Id 
+             an existing pointer if subexpressions match; we want to produce a new one. 
+             Finally, I simply choose not to store information about constants 
+             because I don't do constant folding. *)
              let value_opt : Value.t option =
-               match instr with
-               | Bril.Instr.Const _ | Bril.Instr.Phi _ -> None
-               | other ->
+               match (instr, snd dest) with
+               | Bril.Instr.Const _, _
+               | Bril.Instr.Phi _, _
+               | _, Bril.Bril_type.PtrType _ ->
+                   None
+               | other, _ ->
                    other |> args
                    |> List.map (fun arg -> Var2Num.find arg cloud)
-                   (* canonicalize arguments *)
                    |> canonicalize_arguments instr
                    |> fun lst -> Some (Value.init (op instr) lst)
              in
-             (* find the binding in table that matches value *)
+             (* Find the binding in table that matches value. If value_opt is None,
+             you're guaranteed to not find any matches, hence you get your own row. *)
              let canonical_rep_opt =
                Table.fold
                  (fun num (existing_value, var) acc ->
