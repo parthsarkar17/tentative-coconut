@@ -1,3 +1,5 @@
+open Task1
+
 (** prints out the basic blocks and CFG of a bril program in JSON form. just
     used to evaluate correctness, not meant for stdout. *)
 let _print_bb_cfg () =
@@ -38,4 +40,11 @@ let _test_tdce () =
   |> Yojson.Basic.to_string
   |> Out_channel.output_string Out_channel.stdout
 
-let () = _test_tdce ()
+let _test_lvn () =
+  In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
+  |> Bril.from_json |> Lvn.lvn |> Task1.Tdce.elim_global_unused_assigns
+  |> Task1.Tdce.elim_locally_killed_assigns |> Bril.to_json
+  |> Yojson.Basic.to_string
+  |> Out_channel.output_string Out_channel.stdout
+
+let () = _test_lvn ()
