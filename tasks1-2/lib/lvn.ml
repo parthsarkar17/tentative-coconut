@@ -70,7 +70,7 @@ let op : Bril.Instr.t -> string =
   | Unary (_, op, _) -> Bril.Op.Unary.to_string op
   | Jmp _ -> "jmp"
   | Br _ -> "br"
-  | Call _ -> "call"
+  | Call (_, func_name, _) -> "call " ^ func_name
   | Ret _ -> "ret"
   | Print _ -> "print"
   | Nop -> "nop"
