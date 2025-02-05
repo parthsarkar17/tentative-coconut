@@ -158,123 +158,159 @@ let canonicalize_arguments =
       List.sort Int.compare
   | _ -> fun x -> x
 
+(** Given an instruction [instr], replace its arguments with the canonical
+    variables holding the same values. *)
+let replace_args_with_canonical instr cloud table =
+  instr |> args
+  |> List.map (fun arg ->
+         let num = Var2Num.find arg cloud in
+         table |> Table.find num |> snd)
+  |> fun arg_lst -> Bril.Instr.set_args arg_lst instr
+
+(** Will produce a fresh variable for the destination iff the destination will
+    be overwritten later. This is to guarantee that if a later sub-expression
+    matches this one, the value won't be associated to the wrong variable. *)
+let get_dest_of_transformed_instr curr_dest block pointer instr_index =
+  if
+    List.exists
+      (fun future_instr ->
+        match Bril.Instr.dest future_instr with
+        | None -> false
+        | Some (future_dest, _) -> fst curr_dest = future_dest)
+      (drop (instr_index + 1) block)
+  then (
+    (* create fresh var if this instr's natural dest will be overwritten 
+           later in the block. *)
+    let var, updated_val = FunctionVariables.fresh !pointer in
+    pointer := updated_val;
+    var (* otherwise, just use the dest this instr came with *))
+  else fst curr_dest
+
 (** [perform_lvn_on_block] is a pass over a single block to transform it using
     LVN. It features a gigantic [fold_left] that computes the data structures
     and iteratively builds up the basic block with modified instructions. *)
 let perform_lvn_on_block (ptr : FunctionVariables.t ref)
-    (block : Bril.Instr.t list) =
+    (block : Bril.Instr.t list) : Bril.Instr.t list =
   (* initalize lvn data structures to hold out-of-scope variables *)
   let cloud_init, table_init = init_lvn_datastructs block in
   block
   |> List.fold_left
        (* for every instruction, transform according to LVN *)
-       (fun (block_instrs, table, cloud, instr_index) instr ->
+       (fun ((block_instrs, table, cloud, instr_index) :
+              Bril.Instr.t list
+              * (Value.t option * string) Table.t
+              * int Var2Num.t
+              * int) (instr : Bril.Instr.t) ->
          match Bril.Instr.dest instr with
          (* For instrs that don't have destinations, simply look through
              arguments and swap out for any canonical variables *)
          | None ->
-             instr |> args
-             |> List.map (fun arg ->
-                    let num = Var2Num.find arg cloud in
-                    table |> Table.find num |> snd)
-             |> fun arg_lst ->
-             Bril.Instr.set_args arg_lst instr |> fun transformed_instr ->
-             (transformed_instr :: block_instrs, table, cloud, instr_index + 1)
-         (* Here, the destination does exist. Now, we can proceed with LVN. *)
-         | Some dest ->
-             (* Choose the instructions that should be guaranteed their own values 
-             and shouldn't point to any other canonical value (ie. when value_opt = None). These include constants and pointer-producing expressions. 
-             For pointers, this is desired behavior because we don't want to Id 
-             an existing pointer if subexpressions match; we want to produce a new one. 
-             Finally, I simply choose not to store information about constants 
-             because I don't do constant folding. *)
-             let value_opt : Value.t option =
-               match (instr, snd dest) with
-               | Bril.Instr.Const _, _
-               | Bril.Instr.Phi _, _
-               | _, Bril.Bril_type.PtrType _ ->
-                   None
-               | other, _ ->
-                   other |> args
-                   |> List.map (fun arg -> Var2Num.find arg cloud)
-                   |> canonicalize_arguments instr
-                   |> fun lst -> Some (Value.init (op instr) lst)
-             in
-             (* Find the binding in table that matches value. If value_opt is None,
-             you're guaranteed to not find any matches, hence you get your own row. *)
-             let canonical_rep_opt =
-               Table.fold
-                 (fun num (existing_value, var) acc ->
-                   match acc with
-                   (* if you found it, keep passing it along *)
-                   | Some _ -> acc
-                   (* if you didn't find it yet, see if the current binding works *)
-                   | None -> (
-                       match (existing_value, value_opt) with
-                       | None, _ | _, None -> None
-                       | Some (v1 : Value.t), Some (v2 : Value.t) ->
-                           if Value.( = ) v1 v2 then Some (num, var) else None))
-                 table None
-             in
-             (* compute the new block after transforming this instruction,
+             let transformed = replace_args_with_canonical instr cloud table in
+             (transformed :: block_instrs, table, cloud, instr_index + 1)
+         (* Here, the destination does exist, meaning we can proceed with LVN. First,
+          see if we can let the destination of an Id operation refer to the same value 
+          as its argument. *)
+         | Some dest -> (
+             match
+               ( instr,
+                 match instr with
+                 | Bril.Instr.Unary (_, Bril.Op.Unary.Id, id_arg) ->
+                     block
+                     |> drop (instr_index + 1)
+                     |> List.exists (fun instr ->
+                            match Bril.Instr.dest instr with
+                            | None -> false
+                            | Some (future_dest, _) -> future_dest = id_arg)
+                     |> not
+                 | _ -> false )
+             with
+             (* If there don't exist any future instructions where the argument 
+                of the current Id is overwritten, just let this destination point
+                to the same value as its argument. *)
+             | Bril.Instr.Unary (_, Bril.Op.Unary.Id, id_arg), true ->
+                 let new_instr : Bril.Instr.t =
+                   replace_args_with_canonical instr cloud table
+                 in
+                 let cloud' =
+                   Var2Num.add (fst dest) (Var2Num.find id_arg cloud) cloud
+                 in
+                 (new_instr :: block_instrs, table, cloud', instr_index + 1)
+             (* In this case, either the instruction is not an Id or the argument 
+              to the Id will be overwritten (hence making it wrong to have the dest value
+              tied to the argument value)*)
+             | _ ->
+                 (*  Choose the instructions that should be guaranteed their own values 
+                 and shouldn't point to any other canonical value (this happens exactly when 
+                 value_opt = None). These include constants and pointer-producing expressions. 
+                 For pointers, this is desired behavior because we don't want to Id 
+                 an existing pointer if subexpressions match; we want to produce a new one. 
+                 Finally, I simply choose not to store information about constants 
+                 because I don't do subexpression matching with constants. *)
+                 let value_opt : Value.t option =
+                   match (instr, snd dest) with
+                   (* Retain constants because I choose not to match on constant values *)
+                   | Bril.Instr.Const _, _
+                   | Bril.Instr.Phi _, _
+                   (* Retain calls to functions to maintain possible side effects *)
+                   | Bril.Instr.Call _, _
+                   (* Retain pointer-producing expressions for side-effect reasons *)
+                   | _, Bril.Bril_type.PtrType _ ->
+                       None
+                   | other, _ ->
+                       other |> args
+                       |> List.map (fun arg -> Var2Num.find arg cloud)
+                       |> canonicalize_arguments instr
+                       |> fun lst -> Some (Value.init (op instr) lst)
+                 in
+                 (* Find the binding in table that matches value. If value_opt is None,
+                you're guaranteed to not find any matches, hence you get your own row. *)
+                 let canonical_rep_opt : (int * string) option =
+                   Table.fold
+                     (fun num (existing_value, var) acc ->
+                       match acc with
+                       (* if you found it, keep passing it along *)
+                       | Some _ -> acc
+                       (* if you didn't find it yet, see if the current binding works *)
+                       | None -> (
+                           match (existing_value, value_opt) with
+                           | None, _ | _, None -> None
+                           | Some (v1 : Value.t), Some (v2 : Value.t) ->
+                               if Value.( = ) v1 v2 then Some (num, var)
+                               else None))
+                     table None
+                 in
+                 (* compute the new block after transforming this instruction,
                 the new table after potentially adding a new entry for this instruction's value, 
                 and the number used to reference this instruction's value*)
-             let block_instrs', table', num =
-               match canonical_rep_opt with
-               (* A canonical variable for the value exists; replace current
+                 let (block_instrs', table', num) :
+                     Bril.Instr.t list * (Value.t option * string) Table.t * int
+                     =
+                   match canonical_rep_opt with
+                   (* A canonical variable for the value exists; replace current
                     instruction with Id operation on canonical variable *)
-               | Some (num, canonical_var) ->
-                   Bril.Instr.Unary (dest, Bril.Op.Unary.Id, canonical_var)
-                   |> fun replaced_instr ->
-                   (replaced_instr :: block_instrs, table, num)
-               (* Value didn't match anything that exists; add this to the 
+                   | Some (num, canonical_var) ->
+                       Bril.Instr.Unary (dest, Bril.Op.Unary.Id, canonical_var)
+                       |> fun replaced_instr ->
+                       (replaced_instr :: block_instrs, table, num)
+                   (* Subexpr. didn't match anything that exists; add this to the 
                     LVN data structures *)
-               | None ->
-                   (* fresh num is the number used to represent the never-before-computed value 
-                    associated with the current instruction *)
-                   let fresh_num =
-                     Table.fold (fun _ _ acc -> acc + 1) table 0
-                   in
-                   (* the destination of the current instruction *)
-                   let dest_var =
-                     match
-                       List.exists
-                         (fun future_instr ->
-                           match Bril.Instr.dest future_instr with
-                           | None -> false
-                           | Some (future_dest, _) -> fst dest = future_dest)
-                         (drop (instr_index + 1) block)
-                     with
-                     | true ->
-                         (* create fresh var if this instr's natural dest will be overwritten 
-                            later in the block. *)
-                         let var, updated_val = FunctionVariables.fresh !ptr in
-                         ptr := updated_val;
-                         var
-                         (* otherwise, just use the dest this instr came with *)
-                     | false -> fst dest
-                   in
-                   let table' =
-                     Table.add fresh_num (value_opt, dest_var) table
-                   in
-
-                   ( (instr
-                     (* set arguments to refer to the canonical variables 
-                        for their respective values *)
-                     |> Bril.Instr.set_args
-                          (instr |> args
-                          |> List.map (fun arg ->
-                                 let num = Var2Num.find arg cloud in
-                                 table' |> Table.find num |> snd))
-                     (* set the destination of this instruction to its potentially changed name *)
-                     |> Bril.Instr.set_dest (Some (dest_var, snd dest)))
-                     :: block_instrs,
-                     table',
-                     fresh_num )
-             in
-             (* add a map from this variable to the identifiers for the canonical variable *)
-             let cloud' = Var2Num.add (fst dest) num cloud in
-             (block_instrs', table', cloud', instr_index + 1))
+                   | None ->
+                       ( get_dest_of_transformed_instr dest block ptr instr_index,
+                         Table.fold (fun _ _ acc -> acc + 1) table 0 )
+                       |> fun (trans_dest, fresh_num) ->
+                       let table' =
+                         Table.add fresh_num (value_opt, trans_dest) table
+                       in
+                       let new_instr =
+                         replace_args_with_canonical instr cloud table'
+                         (* set the destination of this instruction to its potentially changed name *)
+                         |> Bril.Instr.set_dest (Some (trans_dest, snd dest))
+                       in
+                       (new_instr :: block_instrs, table', fresh_num)
+                 in
+                 (* add a map from this variable to the identifiers for the canonical variable *)
+                 let cloud' = Var2Num.add (fst dest) num cloud in
+                 (block_instrs', table', cloud', instr_index + 1)))
        ([], table_init, cloud_init, 0)
   (* return the basic block in the right order! *)
   |> fun (x, _, _, _) -> List.rev x
