@@ -1,0 +1,15 @@
+extract = 'total_dyn_inst: (\d+)'
+benchmarks = '../../bril/benchmarks/mixed/*.bril'
+
+[runs.baseline]
+pipeline = [
+    "/Users/parthsarkar/.local/bin/bril2json",
+    "brili -p {args}",
+]
+
+[runs.myopt]
+pipeline = [
+    "/Users/parthsarkar/.local/bin/bril2json",
+    "dune exec bin/main.exe",
+    "brili -p {args}",
+]

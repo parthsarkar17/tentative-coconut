@@ -1,4 +1,4 @@
 (library
  (name task1)
- (libraries bril yojson)
+ (libraries bril yojson csv)
  )

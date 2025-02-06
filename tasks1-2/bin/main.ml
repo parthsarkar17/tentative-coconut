@@ -47,4 +47,8 @@ let _test_lvn () =
   |> Bril.from_json |> Lvn.lvn |> tdce |> Bril.to_json |> Yojson.Basic.to_string
   |> Out_channel.output_string Out_channel.stdout
 
-let () = _test_lvn ()
+let _get_results () =
+  "./results.csv" |> Csv.load |> Task1.Optim_benefits.produce_results
+
+(* let x = Csv.print_readable *)
+let () = _get_results ()

@@ -15,10 +15,6 @@ for root, subdirs, files in os.walk(
             with open(filepath, "r") as file:
                 data = file.read()
                 arg_exists = len(re.findall("ARG", data)) != 0
-                float_exists = len(re.findall("float", data)) != 0
-
-                if float_exists:
-                    continue
 
                 args = (
                     re.findall("(ARGS:)+((.*)?\n)", data)[0][-1] if arg_exists else ""

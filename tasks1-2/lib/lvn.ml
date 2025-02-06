@@ -1,16 +1,25 @@
 module Value = struct
-  type t = { op : string; args : int list }
   (** A type to represent the abstract value that an instruction computes *)
+  type t =
+    | Constant of { typ : string; const : string }
+    | NonConstant of { op : string; args : int list }
 
-  let init (op : string) (args : int list) : t = { op; args }
+  let init_const (typ : string) (const : string) = Constant { typ; const }
+
+  let init_nonconst (op : string) (args : int list) : t =
+    NonConstant { op; args }
 
   (** [( = ) p q] is a boolean that represents structural equality between
       values [p] and [q]. *)
   let ( = ) (v1 : t) (v2 : t) : bool =
-    v1.op = v2.op
-    &&
-    try List.for_all2 Int.equal v1.args v2.args
-    with Invalid_argument _ -> false
+    match (v1, v2) with
+    | Constant v1, Constant v2 -> v1.typ = v2.typ && v1.const = v2.const
+    | NonConstant v1, NonConstant v2 -> (
+        v1.op = v2.op
+        &&
+        try List.for_all2 Int.equal v1.args v2.args
+        with Invalid_argument _ -> false)
+    | _ -> false
 end
 
 module FunctionVariables = struct
@@ -103,6 +112,9 @@ let args : Bril.Instr.t -> string list =
   | Ret arg -> ( match arg with None -> [] | Some arg -> [ arg ])
   | Phi ((_ : Dest.t), label_and_args) -> List.map snd label_and_args
   | Nop | Speculate | Commit | Label _ | Const (_, _) | Jmp _ -> []
+
+let string_of_const_type (const : Bril.Const.t) : string =
+  match const with Int _ -> "int" | Bool _ -> "bool" | Float _ -> "float"
 
 (** [drop n lst] is a list identical to [lst], but with the first [n] elements
     dropped. *)
@@ -240,27 +252,28 @@ let perform_lvn_on_block (ptr : FunctionVariables.t ref)
               tied to the argument value)*)
              | _ ->
                  (*  Choose the instructions that should be guaranteed their own values 
-                 and shouldn't point to any other canonical value (this happens exactly when 
-                 value_opt = None). These include constants and pointer-producing expressions. 
+                 and shouldn't point to any other canonical value (this happens when 
+                 value_opt = None). These include pointer-producing expressions and function calls. 
                  For pointers, this is desired behavior because we don't want to Id 
-                 an existing pointer if subexpressions match; we want to produce a new one. 
-                 Finally, I simply choose not to store information about constants 
-                 because I don't do subexpression matching with constants. *)
+                 an existing pointer if subexpressions match; we want to produce a new one. *)
                  let value_opt : Value.t option =
                    match (instr, snd dest) with
-                   (* Retain constants because I choose not to match on constant values *)
-                   | Bril.Instr.Const _, _
                    | Bril.Instr.Phi _, _
                    (* Retain calls to functions to maintain possible side effects *)
                    | Bril.Instr.Call _, _
                    (* Retain pointer-producing expressions for side-effect reasons *)
                    | _, Bril.Bril_type.PtrType _ ->
                        None
+                   | Bril.Instr.Const (_, const), _ ->
+                       Some
+                         (Value.init_const
+                            (string_of_const_type const)
+                            (Bril.Const.to_string const))
                    | other, _ ->
                        other |> args
                        |> List.map (fun arg -> Var2Num.find arg cloud)
                        |> canonicalize_arguments instr
-                       |> fun lst -> Some (Value.init (op instr) lst)
+                       |> fun lst -> Some (Value.init_nonconst (op instr) lst)
                  in
                  (* Find the binding in table that matches value. If value_opt is None,
                 you're guaranteed to not find any matches, hence you get your own row. *)
@@ -282,9 +295,7 @@ let perform_lvn_on_block (ptr : FunctionVariables.t ref)
                  (* compute the new block after transforming this instruction,
                 the new table after potentially adding a new entry for this instruction's value, 
                 and the number used to reference this instruction's value*)
-                 let (block_instrs', table', num) :
-                     Bril.Instr.t list * (Value.t option * string) Table.t * int
-                     =
+                 let block_instrs', table', num =
                    match canonical_rep_opt with
                    (* A canonical variable for the value exists; replace current
                     instruction with Id operation on canonical variable *)
@@ -298,14 +309,12 @@ let perform_lvn_on_block (ptr : FunctionVariables.t ref)
                        ( get_dest_of_transformed_instr dest block ptr instr_index,
                          Table.fold (fun _ _ acc -> acc + 1) table 0 )
                        |> fun (trans_dest, fresh_num) ->
-                       let table' =
-                         Table.add fresh_num (value_opt, trans_dest) table
-                       in
-                       let new_instr =
-                         replace_args_with_canonical instr cloud table'
-                         (* set the destination of this instruction to its potentially changed name *)
-                         |> Bril.Instr.set_dest (Some (trans_dest, snd dest))
-                       in
+                       Table.add fresh_num (value_opt, trans_dest) table
+                       |> fun table' ->
+                       replace_args_with_canonical instr cloud table'
+                       |> Bril.Instr.set_dest (Some (trans_dest, snd dest))
+                       |> fun new_instr ->
+                       (* set the destination of this instruction to its potentially changed name *)
                        (new_instr :: block_instrs, table', fresh_num)
                  in
                  (* add a map from this variable to the identifiers for the canonical variable *)
