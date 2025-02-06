@@ -1,9 +1,15 @@
-type data = { max : float; mean : float; stdev : float; median : float }
+type data = {
+  max : float;
+  min : float;
+  mean : float;
+  stdev : float;
+  median : float;
+}
 
 let string_of_data data =
-  "\nmaximum: " ^ string_of_float data.max ^ "\n" ^ "mean: "
-  ^ string_of_float data.mean ^ "\n" ^ "stdev: " ^ string_of_float data.stdev
-  ^ "\n" ^ "median: "
+  "\nmaximum: " ^ string_of_float data.max ^ "\n" ^ "minimum: "
+  ^ string_of_float data.min ^ "\n" ^ "mean: " ^ string_of_float data.mean
+  ^ "\n" ^ "stdev: " ^ string_of_float data.stdev ^ "\n" ^ "median: "
   ^ string_of_float data.median
   ^ "\n"
 
@@ -42,6 +48,7 @@ let compute_data lst =
   let mean = List.fold_left ( +. ) 0. lst /. n in
   {
     max = List.fold_left Float.max 0. lst;
+    min = List.fold_left Float.min 100. lst;
     mean;
     stdev =
       Float.sqrt
@@ -53,6 +60,16 @@ let compute_data lst =
         /. n);
     median = compute_median lst;
   }
+
+let probability_of_improvement percent datapoints =
+  datapoints
+  |> List.fold_left (fun acc elt -> if elt >= percent then acc + 1 else acc) 0
+  |> float_of_int
+  |> fun x -> x /. (datapoints |> List.length |> float_of_int)
+
+let normalize lst =
+  let data = compute_data lst in
+  List.map (fun f -> (f -. data.mean) /. data.stdev) lst
 
 let produce_results csv =
   csv |> extract_data |> compute_data |> string_of_data |> print_endline
