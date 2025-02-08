@@ -1,4 +1,4 @@
 (executable
  (public_name lesson4)
  (name main)
- (libraries lesson4))
+ (libraries lesson4 bril yojson))

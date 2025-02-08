@@ -24,60 +24,8 @@ module type DF_ANALYSIS_TEMPLATE = sig
   (** The abstract definition for the meet operator over two members of the
       lattice. For example, could be the lowest upper bound of two sets in a
       powerset lattice (i.e. set union). *)
-end
 
-(** A data type for the elements of each lattice member in the powerset lattice
-    where each set represents the reaching definitions for a basic block. *)
-module Definition = struct
-  type t = int * int * string
-
-  let compare (b1, i1, d1) (b2, i2, d2) =
-    match Int.compare b1 b2 with
-    | 0 -> ( match Int.compare i1 i2 with 0 -> String.compare d1 d2 | m -> m)
-    | n -> n
-end
-
-(** Fill out the data flow analysis form for reaching analysis. *)
-module ReachingAnalysis : DF_ANALYSIS_TEMPLATE = struct
-  module DefinitionSet = Set.Make (Definition)
-
-  type t = DefinitionSet.t
-
-  let empty = DefinitionSet.empty
-
-  let init (func : Bril.Func.t) : t =
-    func.args
-    |> List.fold_left
-         (fun (acc, i) (dest_name, _) ->
-           (DefinitionSet.add (0, i, dest_name) acc, i + 1))
-         (DefinitionSet.empty, 0)
-    |> fst
-
-  let equal = DefinitionSet.equal
-
-  let transfer (block : (int * int * Bril.Instr.t) list) (in_b : t) : t =
-    block
-    (* get the definitions defined in this block *)
-    |> List.fold_left
-         (fun acc (b, i, instr) ->
-           match Bril.Instr.dest instr with
-           | None -> acc
-           | Some (dest_name, _) -> DefinitionSet.add (b, i, dest_name) acc)
-         DefinitionSet.empty
-    (* unite them with the definitions remaining after removing those killed in this block *)
-    |> DefinitionSet.union
-         (List.fold_left
-            (fun acc (_, _, instr) ->
-              match Bril.Instr.dest instr with
-              | None -> acc
-              | Some (instr_dest_name, _) ->
-                  DefinitionSet.filter
-                    (fun (_, _, elt_dest_name) ->
-                      elt_dest_name != instr_dest_name)
-                    acc)
-            in_b block)
-
-  let merge = DefinitionSet.union
+  val to_string : t -> string
 end
 
 module DataFlowAnalysis (Lattice : DF_ANALYSIS_TEMPLATE) = struct
@@ -147,41 +95,42 @@ module DataFlowAnalysis (Lattice : DF_ANALYSIS_TEMPLATE) = struct
     in
     (* for every block, append each successor to this block's set of successors;
     also, append this block to each successor's set of predecessors *)
-    List.fold_left
-      (fun ((preds, succs) : int list IntValuedMap.t * int list IntValuedMap.t)
-           ((id, block_last_inst, _) : int * Bril.Instr.t * _) ->
-        match block_last_inst with
-        | Bril.Instr.Jmp target ->
-            let succ = StringValuedMap.find target label_to_id_map in
-            ( update_map_binding_list succ id preds,
-              update_map_binding_list id succ succs )
-        | Bril.Instr.Br (_, true_branch, false_branch) ->
-            [
-              StringValuedMap.find true_branch label_to_id_map;
-              StringValuedMap.find false_branch label_to_id_map;
-            ]
-            |> List.fold_left
-                 (fun (preds_acc, succs_acc) succ ->
-                   ( update_map_binding_list succ id preds_acc,
-                     update_map_binding_list id succ succs_acc ))
-                 (preds, succs)
-        (* for arbitrary instructions, point to next block unless it DNE *)
-        | _ ->
-            let succ = id + 1 in
-            if id < max_id - 1 then
+    let preds, succs =
+      List.fold_left
+        (fun ((preds, succs) :
+               int list IntValuedMap.t * int list IntValuedMap.t)
+             ((id, block_last_inst, _) : int * Bril.Instr.t * _) ->
+          match block_last_inst with
+          | Bril.Instr.Jmp target ->
+              let succ = StringValuedMap.find target label_to_id_map in
               ( update_map_binding_list succ id preds,
                 update_map_binding_list id succ succs )
-            else (preds, succs))
-      (IntValuedMap.empty, IntValuedMap.empty)
-      enumerated_blocks
+          | Bril.Instr.Br (_, true_branch, false_branch) ->
+              [
+                StringValuedMap.find true_branch label_to_id_map;
+                StringValuedMap.find false_branch label_to_id_map;
+              ]
+              |> List.fold_left
+                   (fun (preds_acc, succs_acc) succ ->
+                     ( update_map_binding_list succ id preds_acc,
+                       update_map_binding_list id succ succs_acc ))
+                   (preds, succs)
+          (* for arbitrary instructions, point to next block unless it DNE *)
+          | _ ->
+              let succ = id + 1 in
+              if id < max_id - 1 then
+                ( update_map_binding_list succ id preds,
+                  update_map_binding_list id succ succs )
+              else (preds, succs))
+        (IntValuedMap.empty, IntValuedMap.empty)
+        enumerated_blocks
+    in
+    (IntValuedMap.add 1 [ 0 ] preds, IntValuedMap.add 0 [ 1 ] succs)
 
-  let worklist (func : Bril.Func.t) :
+  let worklist_algorithm (func : Bril.Func.t) :
       Lattice.t IntValuedMap.t * Lattice.t IntValuedMap.t =
-    (* map from the index of each basic block to a list of enumerated instructions *)
     let basic_blocks = form_blocks func in
-    (* maps from the index of each basic block to a list of indices of its predecessors and successors, respectively *)
     let preds, succs = construct_cfg func in
-
     let rec worklist_aux in_map out_map = function
       | [] -> (in_map, out_map)
       | (block_idx, block) :: worklist ->
@@ -214,7 +163,9 @@ module DataFlowAnalysis (Lattice : DF_ANALYSIS_TEMPLATE) = struct
                (fun acc succ_idx ->
                  (succ_idx, IntValuedMap.find succ_idx basic_blocks) :: acc)
                []
-               (IntValuedMap.find block_idx succs)
+               (match IntValuedMap.find_opt block_idx succs with
+               | None -> []
+               | Some lst -> lst)
              @ worklist
            else worklist)
           |> worklist_aux
@@ -227,8 +178,9 @@ module DataFlowAnalysis (Lattice : DF_ANALYSIS_TEMPLATE) = struct
                   (function _ -> Some out_block)
                   out_map)
     in
+    let entry_lattice_member = Lattice.init func in
     worklist_aux
-      (IntValuedMap.singleton 0 (Lattice.init func))
-      IntValuedMap.empty
+      (IntValuedMap.singleton 1 entry_lattice_member)
+      (IntValuedMap.singleton 0 entry_lattice_member)
       (IntValuedMap.to_list basic_blocks)
 end
