@@ -14,8 +14,7 @@ module Definition = struct
 end
 
 (** Fill out the data flow analysis form for reaching analysis. *)
-module ReachingAnalysisTemplate : Dataflow_analysis.DF_ANALYSIS_TEMPLATE =
-struct
+module ReachingAnalysisTemplate : Dataflow_analysis.LATTICE = struct
   module DefinitionSet = Set.Make (Definition)
 
   type t = DefinitionSet.t

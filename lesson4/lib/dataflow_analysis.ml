@@ -1,4 +1,4 @@
-module type DF_ANALYSIS_TEMPLATE = sig
+module type LATTICE = sig
   type t
   (** An abstract type to represent a member of the lattice (e.g. could be a set
       in the powerset lattice.) *)
@@ -28,7 +28,7 @@ module type DF_ANALYSIS_TEMPLATE = sig
   val to_string : t -> string
 end
 
-module DataFlowAnalysis (Lattice : DF_ANALYSIS_TEMPLATE) = struct
+module DataFlowAnalysis (Lattice : LATTICE) = struct
   (* define map modules for storing cfg representation, etc. *)
   module IntValuedMap = Map.Make (Int)
   module StringValuedMap = Map.Make (String)

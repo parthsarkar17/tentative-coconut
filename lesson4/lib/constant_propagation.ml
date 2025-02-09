@@ -54,41 +54,31 @@ end
 module ConstantPropagation =
   Dataflow_analysis.DataFlowAnalysis (ConstantPropagationLattice)
 
-let global_constant_propagation : Bril.t -> Bril.t =
-  List.map (fun func ->
-      let in_block_map, _ = ConstantPropagation.worklist_algorithm func in
-      func |> ConstantPropagation.form_blocks
-      |> ConstantPropagation.IntValuedMap.to_list
-      |> List.map (fun (block_idx, enumerated_instrs) ->
-             (* set of determined constants at the beginning of this block *)
-             let set_of_consts_in =
-               ConstantPropagation.IntValuedMap.find block_idx in_block_map
-             in
-             (* map each variable to the number of incoming constants that share that variable name *)
-             let vars2num_consts =
-               ConstantPropagationLattice.ConstantSet.fold
-                 (fun const acc ->
-                   ConstantPropagation.StringValuedMap.update const.var
-                     (function
-                       | None -> Some 1 | Some existing -> Some (existing + 1))
-                     acc)
-                 set_of_consts_in ConstantPropagation.StringValuedMap.empty
-             in
-             enumerated_instrs
-             |> List.fold_left
-                  (fun acc (_, instr) ->
-                    (match instr with
-                    | Bril.Instr.Binary (_, bop, arg1, arg2) -> (
-                        match
-                          ( ConstantPropagation.StringValuedMap.find_opt arg1
-                              vars2num_consts,
-                            ConstantPropagation.StringValuedMap.find_opt arg2
-                              vars2num_consts )
-                        with
-                        | Some 1, Some 1 -> instr
-                        | _ -> instr)
-                    | _ -> instr)
-                    :: acc)
-                  []
-             |> List.rev)
-      |> List.concat |> Bril.Func.set_instrs func)
+(** For every function, produce a map from basic block indices to (for each
+    index) a list of constant variables that can provably take only one value.
+*)
+let provable_constants (func : Bril.Func.t) :
+    (int * ConstantPropagationLattice.t) list =
+  func |> ConstantPropagation.worklist_algorithm |> fst
+  |> ConstantPropagation.IntValuedMap.to_list
+  |> List.map (fun (block_idx, lattice_member) ->
+         let consts2num_appearances =
+           ConstantPropagationLattice.ConstantSet.fold
+             (fun const acc ->
+               ConstantPropagation.StringValuedMap.update const.var
+                 (function None -> Some 1 | Some num -> Some (num + 1))
+                 acc)
+             lattice_member ConstantPropagation.StringValuedMap.empty
+         in
+         let filtered_lattice_member =
+           ConstantPropagationLattice.ConstantSet.filter
+             (fun const ->
+               match
+                 ConstantPropagation.StringValuedMap.find const.var
+                   consts2num_appearances
+               with
+               | 1 -> true
+               | _ -> false)
+             lattice_member
+         in
+         (block_idx, filtered_lattice_member))
