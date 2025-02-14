@@ -2,6 +2,8 @@
     where each set represents the reaching definitions for a basic block. *)
 module Definition = struct
   type t = int * int * string
+  (** [t] is the abstract type for a "definition" to perform our reaching
+      definition analysis.*)
 
   let to_string : t -> string = function
     | b, i, dest ->
@@ -14,7 +16,7 @@ module Definition = struct
 end
 
 (** Fill out the data flow analysis form for reaching analysis. *)
-module ReachingAnalysisTemplate : Dataflow_analysis.LATTICE = struct
+module ReachingAnalysisTemplate = struct
   module DefinitionSet = Set.Make (Definition)
 
   type t = DefinitionSet.t
@@ -60,3 +62,37 @@ module ReachingAnalysisTemplate : Dataflow_analysis.LATTICE = struct
     |> List.map (fun mem -> Definition.to_string mem)
     |> List.fold_left (fun acc str_of_mem -> acc ^ str_of_mem ^ "  ") ""
 end
+
+module ReachingAnalysis =
+  Dataflow_analysis.DataFlowAnalysis (ReachingAnalysisTemplate)
+
+module StringSet = Set.Make (String)
+
+let consolidate_reaching_defs func =
+  (* out block contains a dummy set of out flow definitions out of the dummy first block;
+   get rid of it for pretty printing *)
+  let in_blocks, out_blocks =
+    func |> ReachingAnalysis.worklist_algorithm |> fun (x, y) ->
+    (x, ReachingAnalysis.IntValuedMap.remove 0 y)
+  in
+  (* get rid of dummy definitions (i.e. definitions "defined" in block 0, which actually
+  is itself a dummy block)*)
+  let remove_dummy_defs =
+    ReachingAnalysis.IntValuedMap.map
+      (ReachingAnalysisTemplate.DefinitionSet.filter (function
+        | 0, _, _ -> false
+        | _ -> true))
+  in
+  (* since each instruction in a function is distinctly indexed, we need to get rid
+  of the indices and merge all the definitions that share the same destination variable together *)
+  let remove_duplicate_defs =
+    ReachingAnalysis.IntValuedMap.map (fun set ->
+        ReachingAnalysisTemplate.DefinitionSet.fold
+          (fun (_, _, var) acc -> StringSet.add var acc)
+          set StringSet.empty)
+  in
+  let compose block_map =
+    block_map |> remove_dummy_defs |> remove_duplicate_defs
+    |> ReachingAnalysis.IntValuedMap.map StringSet.to_list
+  in
+  (compose in_blocks, compose out_blocks)
