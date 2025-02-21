@@ -8,7 +8,9 @@ let print_dom_analysis_map : Utils.IntSet.t Utils.IntValuedMap.t -> unit =
       |> print_endline)
 
 let print_domination_analysis_func func =
-  let block2dominators, block2dominated = Dominator_analysis.get func in
+  let block2dominators, block2dominated =
+    Dominator_analysis.get_dom_maps func
+  in
   print_endline "dominators: ";
   print_dom_analysis_map block2dominators;
   print_endline "";
@@ -18,8 +20,8 @@ let print_domination_analysis_func func =
 let print_domination_analysis () =
   In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
   |> Bril.from_json
-  |> List.iter (fun func ->
-         print_endline (Bril.Func.to_string func);
+  |> List.iter (fun (func : Bril.Func.t) ->
+         print_endline func.name;
          print_domination_analysis_func func;
          print_endline "")
 
