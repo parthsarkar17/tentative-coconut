@@ -116,31 +116,86 @@ let get_dom_maps (func : Bril.Func.t) =
   (* return a pair of maps *)
   (block2dominators, dominated_of_dominators block2dominators)
 
+let print_dom_analysis_map : Utils.IntSet.t Utils.IntValuedMap.t -> unit =
+  Utils.IntValuedMap.iter (fun (block : int) (set : Utils.IntSet.t) ->
+      string_of_int block ^ ":  "
+      ^ (set |> Utils.IntSet.to_list |> List.map string_of_int
+       |> String.concat " ")
+      |> print_endline)
+
 (** [domination_frontier_of func] is a map from each basic block B in a Bril
     function [func] to a set of basic blocks that are on domination frontier of
     B. *)
 let domination_frontier_of (func : Bril.Func.t) :
     Utils.IntSet.t Utils.IntValuedMap.t =
-  let _, block2dominated = get_dom_maps func in
-  let modified_func = insert_dummy func in
-  let succs = modified_func |> Cfg.construct_cfg |> Cfg.succs in
+  let block2dominated = func |> get_dom_maps |> snd in
+  let succs = func |> insert_dummy |> Cfg.construct_cfg |> Cfg.succs in
   Utils.IntValuedMap.fold
     (fun (block : int) (set_of_dominated : Utils.IntSet.t)
          (frontier_map : Utils.IntSet.t Utils.IntValuedMap.t) ->
       Utils.IntValuedMap.update block
-        (let block_frontier_set =
-           Utils.IntSet.fold
-             (fun (indiv_dominated_block : int) ->
-               Utils.IntSet.union
-                 (List.fold_left
-                    (fun (non_dominated_succs : Utils.IntSet.t) (succ : int) ->
-                      if set_of_dominated |> Utils.IntSet.mem succ |> not then
-                        Utils.IntSet.add succ non_dominated_succs
-                      else non_dominated_succs)
-                    Utils.IntSet.empty
-                    (Utils.IntValuedMap.find indiv_dominated_block succs)))
-             set_of_dominated Utils.IntSet.empty
-         in
-         function _ -> Some block_frontier_set)
+        ( Utils.IntSet.fold
+            (fun (indiv_dominated_block : int) ->
+              Utils.IntSet.union
+                (List.fold_left
+                   (fun (non_dominated_succs : Utils.IntSet.t) (succ : int) ->
+                     if set_of_dominated |> Utils.IntSet.mem succ |> not then
+                       Utils.IntSet.add succ non_dominated_succs
+                     else non_dominated_succs)
+                   Utils.IntSet.empty
+                   (match
+                      Utils.IntValuedMap.find_opt indiv_dominated_block succs
+                    with
+                   | None -> []
+                   | Some l -> l)))
+            set_of_dominated Utils.IntSet.empty
+        |> fun block_frontier_set -> function
+          | _ -> Some block_frontier_set )
         frontier_map)
     block2dominated Utils.IntValuedMap.empty
+
+type domination_tree = Block of (int option * domination_tree list)
+
+let compute_domination_tree (func : Bril.Func.t) =
+  let block_2_strictlydominated, list_of_blocks =
+    func |> get_dom_maps |> snd |> fun block_2_dominated ->
+    ( Utils.IntValuedMap.fold
+        (fun (block : int) (dominated : Utils.IntSet.t)
+             (acc : Utils.IntSet.t Utils.IntValuedMap.t) ->
+          Utils.IntValuedMap.add block (Utils.IntSet.remove block dominated) acc)
+        block_2_dominated Utils.IntValuedMap.empty,
+      block_2_dominated |> Utils.IntValuedMap.bindings |> List.map fst )
+  in
+  let block_2_immediatelydominated =
+    List.fold_left
+      (fun (acc : Utils.IntSet.t Utils.IntValuedMap.t) (block : int) ->
+        let strictly_dominated_by_block_set =
+          Utils.IntValuedMap.find block block_2_strictlydominated
+        in
+        Utils.IntSet.fold
+          (fun (strictly_dominated_by_block : int)
+               (acc' : Utils.IntSet.t Utils.IntValuedMap.t) ->
+            List.fold_left
+              (fun (acc'' : Utils.IntSet.t Utils.IntValuedMap.t) (block' : int)
+                 ->
+                let strictly_dominated_by_block'_set =
+                  Utils.IntValuedMap.find block' block_2_strictlydominated
+                in
+                if
+                  Utils.IntSet.mem strictly_dominated_by_block
+                    strictly_dominated_by_block'_set
+                  && Utils.IntSet.mem block strictly_dominated_by_block'_set
+                then
+                  Utils.IntValuedMap.update block'
+                    (function
+                      | None -> Some Utils.IntSet.empty
+                      | Some set ->
+                          Some
+                            (Utils.IntSet.remove strictly_dominated_by_block set))
+                    acc''
+                else acc'')
+              acc' list_of_blocks)
+          strictly_dominated_by_block_set acc)
+      block_2_strictlydominated list_of_blocks
+  in
+  block_2_immediatelydominated
