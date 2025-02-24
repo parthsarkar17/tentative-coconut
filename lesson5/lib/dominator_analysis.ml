@@ -1,82 +1,76 @@
-let rec find_dominators_aux (pred_map : int list Utils.IntValuedMap.t)
-    (all_blocks : Utils.IntSet.t) (map_changed : bool)
-    (block2dominators : Utils.IntSet.t Utils.IntValuedMap.t) :
-    Utils.IntSet.t Utils.IntValuedMap.t =
-  if map_changed then block2dominators
+open Utils
+
+let rec find_dominators_aux (pred_map : int list IntValuedMap.t)
+    (all_blocks : IntSet.t) (map_changed : bool)
+    (block2dominators : IntSet.t IntValuedMap.t) : IntSet.t IntValuedMap.t =
+  if not map_changed then block2dominators
   else
     (false, block2dominators)
-    |> Utils.IntSet.fold (* iterate through non-entry vertices*)
+    |> IntSet.fold (* iterate through non-entry vertices*)
          (fun (vertex : int)
-              ((map_changed, b2d_acc) :
-                bool * Utils.IntSet.t Utils.IntValuedMap.t) ->
+              ((map_changed, b2d_acc) : bool * IntSet.t IntValuedMap.t) ->
            (* for body starts*)
            (* union of {vertex} and {intersection of (dom[pred] for all preds)} *)
-           let vertex_dominators =
-             pred_map
-             |> Utils.IntValuedMap.find vertex
+           let (vertex_dominators : IntSet.t) =
+             pred_map |> IntValuedMap.find vertex
              |> List.fold_left
                   (fun intersection_acc pred ->
-                    Utils.IntSet.inter intersection_acc
-                      (match Utils.IntValuedMap.find_opt pred b2d_acc with
+                    IntSet.inter intersection_acc
+                      (match IntValuedMap.find_opt pred b2d_acc with
                       | None -> all_blocks
                       | Some pred_dominators -> pred_dominators))
                   all_blocks
-             |> Utils.IntSet.union (Utils.IntSet.singleton vertex)
+             |> IntSet.union (IntSet.singleton vertex)
            in
            (* the map has changed if it previously changed for some other vertex,
-            or if no binding currently exist for vertexs, or if the current binding 
-            and the new binding aren't equal*)
-           let new_map_changed =
-             map_changed
+            or if no binding currently exist for the current vertex, or if the 
+            existing vertex binding and the new binding are not equal. *)
+           ( (map_changed
              ||
-             match Utils.IntValuedMap.find_opt vertex b2d_acc with
+             match IntValuedMap.find_opt vertex b2d_acc with
              | None -> true
              | Some og_vertex_dominators ->
-                 vertex_dominators
-                 |> Utils.IntSet.equal og_vertex_dominators
-                 |> not
-           in
-           ( new_map_changed,
-             Utils.IntValuedMap.update vertex
+                 vertex_dominators |> IntSet.equal og_vertex_dominators |> not),
+             IntValuedMap.update vertex
                (function _ -> Some vertex_dominators)
                b2d_acc )
            (* for body ends*))
          ((* iterate through every vertex except for entry, which is indexed as 1 *)
-          Utils.IntSet.filter
+          IntSet.filter
             (function 1 -> false | _ -> true)
             all_blocks)
-    |> fun (x, y) -> find_dominators_aux pred_map all_blocks x y
+    |> fun (map_changed', block2dominators') ->
+    find_dominators_aux pred_map all_blocks map_changed' block2dominators'
 
 (** [find_dominators func] is a map from each basic block to the list of basic
     blocks that dominate it. These basic blocks are formed from the contents of
     [func]. *)
-let find_dominators (func : Bril.Func.t) : Utils.IntSet.t Utils.IntValuedMap.t =
-  let (basic_block_preds, all_blocks) :
-      int list Utils.IntValuedMap.t * Utils.IntSet.t =
+let find_dominators (func : Bril.Func.t) : IntSet.t IntValuedMap.t =
+  let (basic_block_preds, all_blocks) : int list IntValuedMap.t * IntSet.t =
     func |> Cfg.construct_cfg |> Cfg.preds |> fun preds ->
     ( preds,
-      preds |> Utils.IntValuedMap.to_list
+      preds |> IntValuedMap.to_list
       |> List.filter_map (fun (k, _) -> match k with 0 -> None | _ -> Some k)
-      |> Utils.IntSet.of_list )
+      |> IntSet.of_list )
   in
-  find_dominators_aux basic_block_preds all_blocks false
-    (Utils.IntValuedMap.singleton 1 (Utils.IntSet.singleton 1))
+  find_dominators_aux basic_block_preds all_blocks true
+    (IntValuedMap.singleton 1 (IntSet.singleton 1))
 
 (** [dominated_of_dominators map] is a map from each basic block to the list of
     basic blocks that are dominated by it. [map] is the output of
     [find_dominators] *)
 let dominated_of_dominators block2dominators =
-  Utils.IntValuedMap.fold
+  IntValuedMap.fold
     (fun block dominators_of_block block2dominated_acc ->
-      Utils.IntSet.fold
+      IntSet.fold
         (fun dominator block2dominated_acc' ->
-          Utils.IntValuedMap.update dominator
+          IntValuedMap.update dominator
             (function
-              | None -> Some (Utils.IntSet.singleton block)
-              | Some set -> Some (Utils.IntSet.add block set))
+              | None -> Some (IntSet.singleton block)
+              | Some set -> Some (IntSet.add block set))
             block2dominated_acc')
         dominators_of_block block2dominated_acc)
-    block2dominators Utils.IntValuedMap.empty
+    block2dominators IntValuedMap.empty
 
 (** [insert_dummy func] is a transformed Bril function, where a new entry basic
     block is inserted to represent the arguments to function [func]. If [func]
@@ -116,86 +110,161 @@ let get_dom_maps (func : Bril.Func.t) =
   (* return a pair of maps *)
   (block2dominators, dominated_of_dominators block2dominators)
 
-let print_dom_analysis_map : Utils.IntSet.t Utils.IntValuedMap.t -> unit =
-  Utils.IntValuedMap.iter (fun (block : int) (set : Utils.IntSet.t) ->
+(** Prints out a map from integers to a set of integers. *)
+let print_dom_analysis_map : IntSet.t IntValuedMap.t -> unit =
+  IntValuedMap.iter (fun (block : int) (set : IntSet.t) ->
       string_of_int block ^ ":  "
-      ^ (set |> Utils.IntSet.to_list |> List.map string_of_int
-       |> String.concat " ")
+      ^ (set |> IntSet.to_list |> List.map string_of_int |> String.concat " ")
       |> print_endline)
 
 (** [domination_frontier_of func] is a map from each basic block B in a Bril
     function [func] to a set of basic blocks that are on domination frontier of
     B. *)
-let domination_frontier_of (func : Bril.Func.t) :
-    Utils.IntSet.t Utils.IntValuedMap.t =
+let domination_frontier_of (func : Bril.Func.t) : IntSet.t IntValuedMap.t =
   let block2dominated = func |> get_dom_maps |> snd in
   let succs = func |> insert_dummy |> Cfg.construct_cfg |> Cfg.succs in
-  Utils.IntValuedMap.fold
-    (fun (block : int) (set_of_dominated : Utils.IntSet.t)
-         (frontier_map : Utils.IntSet.t Utils.IntValuedMap.t) ->
-      Utils.IntValuedMap.update block
-        ( Utils.IntSet.fold
-            (fun (indiv_dominated_block : int) ->
-              Utils.IntSet.union
+  IntValuedMap.fold
+    (fun (block : int) (set_of_dominated : IntSet.t)
+         (frontier_map : IntSet.t IntValuedMap.t) ->
+      IntValuedMap.update block
+        ( IntSet.fold
+            (fun (dominated : int) ->
+              IntSet.union
                 (List.fold_left
-                   (fun (non_dominated_succs : Utils.IntSet.t) (succ : int) ->
-                     if set_of_dominated |> Utils.IntSet.mem succ |> not then
-                       Utils.IntSet.add succ non_dominated_succs
+                   (fun (non_dominated_succs : IntSet.t) (succ : int) ->
+                     if set_of_dominated |> IntSet.mem succ |> not then
+                       IntSet.add succ non_dominated_succs
                      else non_dominated_succs)
-                   Utils.IntSet.empty
-                   (match
-                      Utils.IntValuedMap.find_opt indiv_dominated_block succs
-                    with
+                   IntSet.empty
+                   (match IntValuedMap.find_opt dominated succs with
                    | None -> []
                    | Some l -> l)))
-            set_of_dominated Utils.IntSet.empty
+            set_of_dominated IntSet.empty
         |> fun block_frontier_set -> function
           | _ -> Some block_frontier_set )
         frontier_map)
-    block2dominated Utils.IntValuedMap.empty
+    block2dominated IntValuedMap.empty
 
-type domination_tree = Block of (int option * domination_tree list)
-
-let compute_domination_tree (func : Bril.Func.t) =
-  let block_2_strictlydominated, list_of_blocks =
+(** [compute_domination_tree f] is a data structure mapping each block in a Bril
+    function [f] (indexed as an integer) to its set of blocks that it
+    immediately dominates. By definition of immediate domination, we know that
+    this map forms a domination tree. *)
+let compute_domination_tree (func : Bril.Func.t) : IntSet.t IntValuedMap.t =
+  let block_2_strictlydominated, all_blocks =
     func |> get_dom_maps |> snd |> fun block_2_dominated ->
-    ( Utils.IntValuedMap.fold
-        (fun (block : int) (dominated : Utils.IntSet.t)
-             (acc : Utils.IntSet.t Utils.IntValuedMap.t) ->
-          Utils.IntValuedMap.add block (Utils.IntSet.remove block dominated) acc)
-        block_2_dominated Utils.IntValuedMap.empty,
-      block_2_dominated |> Utils.IntValuedMap.bindings |> List.map fst )
+    ( IntValuedMap.fold
+        (fun (block : int) (dominated : IntSet.t)
+             (acc : IntSet.t IntValuedMap.t) ->
+          IntValuedMap.add block (IntSet.remove block dominated) acc)
+        block_2_dominated IntValuedMap.empty,
+      block_2_dominated |> IntValuedMap.bindings |> List.map fst )
   in
-  let block_2_immediatelydominated =
-    List.fold_left
-      (fun (acc : Utils.IntSet.t Utils.IntValuedMap.t) (block : int) ->
-        let strictly_dominated_by_block_set =
-          Utils.IntValuedMap.find block block_2_strictlydominated
+  (* For every block, get the set of things strictly dominated by the block. 
+  Then, for every other block block', if block' dominates both block and
+  the strictly dominated block, then remove the strictly dominated block
+  from the set of things strictly dominated by block'. We are thenleft with the 
+  set of immediately-dominated blocks, for every block. *)
+  List.fold_left
+    (fun (acc : IntSet.t IntValuedMap.t) (block : int) ->
+      let strictly_dominated_by_block_set =
+        IntValuedMap.find block block_2_strictlydominated
+      in
+      IntSet.fold
+        (fun (strictly_dominated_by_block : int)
+             (acc' : IntSet.t IntValuedMap.t) ->
+          List.fold_left
+            (fun (acc'' : IntSet.t IntValuedMap.t) (block' : int) ->
+              let strictly_dominated_by_block'_set =
+                IntValuedMap.find block' block_2_strictlydominated
+              in
+              if
+                IntSet.mem strictly_dominated_by_block
+                  strictly_dominated_by_block'_set
+                && IntSet.mem block strictly_dominated_by_block'_set
+              then
+                IntValuedMap.update block'
+                  (function
+                    | None -> Some IntSet.empty
+                    | Some set ->
+                        Some (IntSet.remove strictly_dominated_by_block set))
+                  acc''
+              else acc'')
+            acc' all_blocks)
+        strictly_dominated_by_block_set acc)
+    block_2_strictlydominated all_blocks
+
+(** From a list of lists containing abstract elements, derive a list of lists of
+    these abstract types up to and including some input of this type. *)
+let up_to (i : 'a) : 'a list list -> 'a list list =
+  List.fold_left
+    (fun (acc : 'a list list) (lst : 'a list) ->
+      if lst |> List.mem i |> not then acc
+      else
+        (lst
+        |> List.fold_left
+             (fun ((hit, sublst) : bool * 'a list) (elt : 'a) ->
+               if hit then (hit, sublst) else (elt = i, elt :: sublst))
+             (false, [])
+        |> snd |> List.rev)
+        :: acc)
+    []
+
+(** Given a basic block, enumerate every path within a CFG, from entry, that can
+    reach the basic block. *)
+let rec enumerate_paths_aux (block : int) (cfg : IntSet.t IntValuedMap.t)
+    (visited : IntSet.t) (paths : int list list) : int list list =
+  let visited' = IntSet.add block visited in
+  IntSet.fold
+    (fun (block_neighbor : int) (paths_acc : int list list) ->
+      if IntSet.mem block_neighbor visited' then paths_acc
+      else
+        let paths_out_of_neighbor : int list list =
+          enumerate_paths_aux block_neighbor cfg visited' [ [ block_neighbor ] ]
         in
-        Utils.IntSet.fold
-          (fun (strictly_dominated_by_block : int)
-               (acc' : Utils.IntSet.t Utils.IntValuedMap.t) ->
-            List.fold_left
-              (fun (acc'' : Utils.IntSet.t Utils.IntValuedMap.t) (block' : int)
-                 ->
-                let strictly_dominated_by_block'_set =
-                  Utils.IntValuedMap.find block' block_2_strictlydominated
-                in
-                if
-                  Utils.IntSet.mem strictly_dominated_by_block
-                    strictly_dominated_by_block'_set
-                  && Utils.IntSet.mem block strictly_dominated_by_block'_set
-                then
-                  Utils.IntValuedMap.update block'
-                    (function
-                      | None -> Some Utils.IntSet.empty
-                      | Some set ->
-                          Some
-                            (Utils.IntSet.remove strictly_dominated_by_block set))
-                    acc''
-                else acc'')
-              acc' list_of_blocks)
-          strictly_dominated_by_block_set acc)
-      block_2_strictlydominated list_of_blocks
+        let paths_up_to_block : int list list = up_to block paths_acc in
+        List.fold_left
+          (fun acc path_up_to_block ->
+            List.map
+              (fun path_out_of_neighbor ->
+                path_up_to_block @ path_out_of_neighbor)
+              paths_out_of_neighbor
+            @ acc)
+          [] paths_up_to_block
+        @ paths_acc)
+    (match IntValuedMap.find_opt block cfg with
+    | None -> IntSet.empty
+    | Some set -> set)
+    paths
+
+let enumerate_paths (func : Bril.Func.t) : int list list =
+  func |> insert_dummy |> Cfg.construct_cfg |> Cfg.succs |> fun cfg_succs ->
+  [ [ 1 ] ]
+  |> enumerate_paths_aux 1
+       (IntValuedMap.map IntSet.of_list cfg_succs)
+       IntSet.empty
+  |> List.sort_uniq (fun ilst1 ilst2 ->
+         match Int.compare (List.length ilst1) (List.length ilst2) with
+         | 0 ->
+             if ilst2 |> List.map2 Int.equal ilst1 |> List.for_all (fun x -> x)
+             then 0
+             else -1
+         | n -> n)
+
+let test_correctness (func : Bril.Func.t) : bool =
+  let (enumerated_paths : int list list) = enumerate_paths func in
+  let (block2dominated : IntSet.t IntValuedMap.t) =
+    func |> get_dom_maps |> fst
   in
-  block_2_immediatelydominated
+  let all_blocks =
+    IntValuedMap.bindings block2dominated |> List.map fst |> IntSet.of_list
+  in
+  IntValuedMap.fold
+    (fun (block : int) (dominators : IntSet.t) (prev_correct : bool) ->
+      prev_correct
+      && List.filter
+           (fun ilst -> ilst |> List.rev |> List.hd = block)
+           enumerated_paths
+         |> List.map IntSet.of_list
+         |> List.fold_left IntSet.inter all_blocks
+         |> IntSet.equal dominators)
+    block2dominated true
