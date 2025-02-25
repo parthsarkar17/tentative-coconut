@@ -121,29 +121,47 @@ let print_dom_analysis_map : IntSet.t IntValuedMap.t -> unit =
     function [func] to a set of basic blocks that are on domination frontier of
     B. *)
 let domination_frontier_of (func : Bril.Func.t) : IntSet.t IntValuedMap.t =
-  let block2dominated = func |> get_dom_maps |> snd in
-  let succs = func |> insert_dummy |> Cfg.construct_cfg |> Cfg.succs in
-  IntValuedMap.fold
-    (fun (block : int) (set_of_dominated : IntSet.t)
-         (frontier_map : IntSet.t IntValuedMap.t) ->
-      IntValuedMap.update block
-        ( IntSet.fold
-            (fun (dominated : int) ->
-              IntSet.union
-                (List.fold_left
-                   (fun (non_dominated_succs : IntSet.t) (succ : int) ->
-                     if set_of_dominated |> IntSet.mem succ |> not then
-                       IntSet.add succ non_dominated_succs
-                     else non_dominated_succs)
-                   IntSet.empty
-                   (match IntValuedMap.find_opt dominated succs with
-                   | None -> []
-                   | Some l -> l)))
-            set_of_dominated IntSet.empty
-        |> fun block_frontier_set -> function
-          | _ -> Some block_frontier_set )
-        frontier_map)
-    block2dominated IntValuedMap.empty
+  (* gets maps from each block to sets of dominated and strictly dominated blocks,
+  plus a list of all blocks over which we will iterate. *)
+  let (block2dominated, strict_block2dominated, all_blocks) :
+      IntSet.t IntValuedMap.t * IntSet.t IntValuedMap.t * int list =
+    func |> get_dom_maps |> snd |> fun dominated ->
+    ( dominated,
+      IntValuedMap.fold
+        (fun block dominated acc ->
+          IntValuedMap.add block (IntSet.remove block dominated) acc)
+        dominated IntValuedMap.empty )
+    |> fun (dominated, strictly_dominated) ->
+    ( dominated,
+      strictly_dominated,
+      strictly_dominated |> IntValuedMap.bindings |> List.map fst )
+  in
+  (* map from each block to a list of predecessors given by the cfg *)
+  let preds = func |> insert_dummy |> Cfg.construct_cfg |> Cfg.preds in
+  (* For every block A and for every block B, if B is not strictly dominated by A
+    and there exists a predecessor of B that is normally-dominated (i.e. reflexively)
+  dominated by A, then add B to A's frontier set. *)
+  List.fold_left
+    (fun (block2frontier : IntSet.t IntValuedMap.t) (block_A : int) ->
+      let (dominated, strictly_dominated) : IntSet.t * IntSet.t =
+        ( IntValuedMap.find block_A block2dominated,
+          IntValuedMap.find block_A strict_block2dominated )
+      in
+      IntValuedMap.add block_A
+        (List.fold_left
+           (fun (frontier_of_A : IntSet.t) (block_B : int) ->
+             if
+               IntSet.mem block_B strictly_dominated
+               && IntSet.exists
+                    (fun pred -> IntSet.mem pred dominated)
+                    (match IntValuedMap.find_opt block_B preds with
+                    | None -> IntSet.empty
+                    | Some set -> IntSet.of_list set)
+             then IntSet.add block_B frontier_of_A
+             else frontier_of_A)
+           IntSet.empty all_blocks)
+        block2frontier)
+    IntValuedMap.empty all_blocks
 
 (** [compute_domination_tree f] is a data structure mapping each block in a Bril
     function [f] (indexed as an integer) to its set of blocks that it
@@ -192,6 +210,10 @@ let compute_domination_tree (func : Bril.Func.t) : IntSet.t IntValuedMap.t =
             acc' all_blocks)
         strictly_dominated_by_block_set acc)
     block_2_strictlydominated all_blocks
+
+(* --------------------------------------------------------------------------- *)
+(* |                        BEGIN TESTING FUNCTIONS                          | *)
+(* --------------------------------------------------------------------------- *)
 
 (** From a list of lists containing abstract elements, derive a list of lists of
     these abstract types up to and including some input of this type. *)
