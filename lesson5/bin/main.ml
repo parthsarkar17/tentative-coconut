@@ -42,4 +42,4 @@ let _test_correctness () =
       f |> Dominator_analysis.test_correctness |> string_of_bool
       |> print_endline)
 
-let () = _print_domination_frontier ()
+let () = _test_correctness ()
