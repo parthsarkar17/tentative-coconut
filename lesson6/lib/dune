@@ -1,0 +1,3 @@
+(library
+ (name lesson6)
+ (libraries bril))

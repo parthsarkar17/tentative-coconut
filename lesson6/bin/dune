@@ -1,0 +1,4 @@
+(executable
+ (public_name lesson6)
+ (name main)
+ (libraries lesson6))
