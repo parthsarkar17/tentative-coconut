@@ -1,4 +1,4 @@
 (executable
  (public_name lesson6)
  (name main)
- (libraries lesson6))
+ (libraries lesson6 csv))
