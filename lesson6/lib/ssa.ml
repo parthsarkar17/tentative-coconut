@@ -170,7 +170,7 @@ let func_into_ssa (func : Bril.Func.t) :
            let set_args = (arg ^ ".1.0", arg) in
            Hashtbl.add setargs2type set_args arg_type;
            Bril.Instr.Set (arg ^ ".1.0", arg)))
-    instrs
+    (Bril.Instr.Label "dummy_block" :: instrs)
   (* set all unique variables for the entry block to unknown, and make the
   shadow domain know that by adding a set for each variable *)
   |> fun all_instrs ->
