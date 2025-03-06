@@ -45,7 +45,7 @@ let phi_nodes_of (func : Bril.Func.t) : Bril.Dest.t PairValuedMap.t =
          |> DestSet.fold
               (fun ((var, var_type) : Bril.Dest.t) ->
                 PairValuedMap.add (var, block_id)
-                  (var ^ "." ^ string_of_int block_id ^ ".1", var_type))
+                  (var ^ "." ^ string_of_int block_id ^ ".0", var_type))
               func_dests
          |> fun x -> (x, block_id + 1))
        (PairValuedMap.empty, 1)
@@ -167,9 +167,9 @@ let func_into_ssa (func : Bril.Func.t) :
   Basic_blocks.insert_top_of_block
     (func.args
     |> List.map (fun (arg, arg_type) ->
-           let set_args = (arg ^ ".1.1", arg) in
+           let set_args = (arg ^ ".1.0", arg) in
            Hashtbl.add setargs2type set_args arg_type;
-           Bril.Instr.Set (arg ^ ".1.1", arg)))
+           Bril.Instr.Set (arg ^ ".1.0", arg)))
     instrs
   (* set all unique variables for the entry block to unknown, and make the
   shadow domain know that by adding a set for each variable *)
@@ -179,7 +179,7 @@ let func_into_ssa (func : Bril.Func.t) :
     |> PairValuedMap.filter (fun (_, other_block) _ -> other_block = 1)
     |> PairValuedMap.bindings
     |> List.map (fun ((_, (uniq_var, uv_type)) : Pair.t * Bril.Dest.t) ->
-           let zero_indexed_unique_var = rename uniq_var 0 in
+           let zero_indexed_unique_var = rename uniq_var (-1) in
            Hashtbl.add setargs2type (uniq_var, zero_indexed_unique_var) uv_type;
            ( Bril.Instr.Undef (zero_indexed_unique_var, uv_type),
              Bril.Instr.Set (uniq_var, zero_indexed_unique_var) ))
