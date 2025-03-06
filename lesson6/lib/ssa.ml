@@ -24,6 +24,14 @@ let dests_written_to (func : Bril.Func.t) =
        (func.args
        |> List.fold_left (fun acc dest -> DestSet.add dest acc) DestSet.empty)
 
+(** If [var] is of the form `i.j.x`, [rename var k] is a variable of the form
+    `i.j.k`. *)
+let rename (var : string) (k : int) : string =
+  var |> String.to_seq |> List.of_seq |> List.rev |> List.tl |> List.rev
+  |> List.map (String.make 1)
+  |> String.concat ""
+  |> fun x -> x ^ string_of_int k
+
 (** [phi_nodes_of f] is a map taking a variable-block pair to a unique variable
     used to represent the variable at the phi node at the beginning of the
     block; naive implementation of SSA. *)
@@ -76,12 +84,8 @@ let transform_block (block_id : int) (pair2unique : Bril.Dest.t PairValuedMap.t)
           (instr_args_transformed :: rev_transformed_block, ogvar2newestvar)
       | Some (dest_var, dest_type) ->
           let new_dest_var =
-            ogvar2newestvar
-            |> StringValuedMap.find dest_var
-            |> String.to_seq |> List.of_seq |> List.rev |> List.tl |> List.rev
-            |> List.map (String.make 1)
-            |> String.concat ""
-            |> fun x -> x ^ string_of_int instr_id
+            ogvar2newestvar |> StringValuedMap.find dest_var |> fun x ->
+            rename x instr_id
           in
           ( Bril.Instr.set_dest
               (Some (new_dest_var, dest_type))
@@ -110,59 +114,81 @@ let func_into_ssa (func : Bril.Func.t) :
       Basic_blocks.form_blocks func,
       Cfg.(func |> construct_cfg |> succs) )
   in
+  (* stores the bril_type of the shadow variable being assigned in every set *)
   let setargs2type : (string * string, Bril.Bril_type.t) Hashtbl.t =
     Hashtbl.create
       ((func |> dests_written_to |> DestSet.cardinal)
       * IntValuedMap.cardinal basic_blocks
       * 2)
   in
-  basic_blocks |> IntValuedMap.bindings
-  (* transform the block to use latest, local unique variable names *)
-  |> List.map (fun (block_id, indexed_block) ->
-         let transformed_block, latest_vars =
-           transform_block block_id pair2unique indexed_block
-         in
-         (block_id, transformed_block, latest_vars))
-  (* add get instructions at the beginning of every basic block *)
-  |> List.map (fun (block_id, block_instrs, original2latest) ->
+  let instrs =
+    basic_blocks |> IntValuedMap.bindings
+    (* transform the block to use latest, local unique variable names *)
+    |> List.map (fun (block_id, indexed_block) ->
+           let transformed_block, latest_vars =
+             transform_block block_id pair2unique indexed_block
+           in
+           (block_id, transformed_block, latest_vars))
+    (* add get instructions at the beginning of every basic block *)
+    |> List.map (fun (block_id, block_instrs, original2latest) ->
+           []
+           |> PairValuedMap.fold
+                (fun (_, other_block_id) unique_local acc ->
+                  if block_id = other_block_id then unique_local :: acc else acc)
+                pair2unique
+           |> List.map (fun (dest : Bril.Dest.t) -> Bril.Instr.Get dest)
+           |> fun gets ->
+           ( block_id,
+             Basic_blocks.insert_top_of_block gets block_instrs,
+             original2latest ))
+    (* add get instructions at the beginning of every basic block *)
+    |> List.map (fun (block_id, block_instrs, original2latest) ->
+           List.map
+             (fun succ ->
+               pair2unique
+               |> PairValuedMap.filter (fun (_, other_block_id) _ ->
+                      succ = other_block_id)
+               |> PairValuedMap.bindings
+               |> List.map (fun ((original_var, _), (unique_var, var_type)) ->
+                      let set_args =
+                        ( unique_var,
+                          StringValuedMap.find original_var original2latest )
+                      in
+                      Hashtbl.add setargs2type set_args var_type;
+                      Bril.Instr.Set (fst set_args, snd set_args)))
+             (match IntValuedMap.find_opt block_id succs with
+             | None -> []
+             | Some lst -> lst)
+           |> List.concat
+           |> fun sets -> Basic_blocks.insert_bottom_of_block sets block_instrs)
+    |> List.concat
+  in
+  (* set function arguments *)
+  Basic_blocks.insert_top_of_block
+    (func.args
+    |> List.map (fun (arg, arg_type) ->
+           let set_args = (arg ^ ".1.1", arg) in
+           Hashtbl.add setargs2type set_args arg_type;
+           Bril.Instr.Set (arg ^ ".1.1", arg)))
+    instrs
+  (* set all unique variables for the entry block to unknown, and make the
+  shadow domain know that by adding a set for each variable *)
+  |> fun all_instrs ->
+  Basic_blocks.insert_top_of_block
+    (pair2unique
+    |> PairValuedMap.filter (fun (_, other_block) _ -> other_block = 1)
+    |> PairValuedMap.bindings
+    |> List.map (fun ((_, (uniq_var, uv_type)) : Pair.t * Bril.Dest.t) ->
+           let zero_indexed_unique_var = rename uniq_var 0 in
+           Hashtbl.add setargs2type (uniq_var, zero_indexed_unique_var) uv_type;
+           ( Bril.Instr.Undef (zero_indexed_unique_var, uv_type),
+             Bril.Instr.Set (uniq_var, zero_indexed_unique_var) ))
+    |> List.fold_left
+         (fun acc (undef_instr, set_instr) -> set_instr :: undef_instr :: acc)
          []
-         |> PairValuedMap.fold
-              (fun (_, other_block_id) unique_local acc ->
-                if block_id = other_block_id then unique_local :: acc else acc)
-              pair2unique
-         |> List.map (fun (dest : Bril.Dest.t) -> Bril.Instr.Get dest)
-         |> fun gets ->
-         ( block_id,
-           Basic_blocks.insert_top_of_block gets block_instrs,
-           original2latest ))
-  (* add get instructions at the beginning of every basic block *)
-  |> List.map (fun (block_id, block_instrs, original2latest) ->
-         List.map
-           (fun succ ->
-             pair2unique
-             |> PairValuedMap.filter (fun (_, other_block_id) _ ->
-                    succ = other_block_id)
-             |> PairValuedMap.bindings
-             |> List.map (fun ((original_var, _), (unique_var, var_type)) ->
-                    let set_args =
-                      ( unique_var,
-                        StringValuedMap.find original_var original2latest )
-                    in
-                    Hashtbl.add setargs2type set_args var_type;
-                    Bril.Instr.Set (fst set_args, snd set_args)))
-           (match IntValuedMap.find_opt block_id succs with
-           | None -> []
-           | Some lst -> lst)
-         |> List.concat
-         |> fun sets -> Basic_blocks.insert_bottom_of_block sets block_instrs)
-  |> List.concat
-  |> fun instrs ->
-  (func.args
-  |> List.map (fun (arg, arg_type) ->
-         let set_args = (arg ^ ".1.1", arg) in
-         Hashtbl.add setargs2type set_args arg_type;
-         Bril.Instr.Set (arg ^ ".1.1", arg)))
-  @ instrs
+    |> List.rev)
+    all_instrs
+  (* set the new instructions for this func *)
   |> Bril.Func.set_instrs func
   |> fun x -> (x, Hashtbl.to_seq setargs2type |> List.of_seq)
 
