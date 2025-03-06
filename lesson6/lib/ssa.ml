@@ -6,39 +6,39 @@ module Pair = struct
   let compare (v1, b1) (v2, b2) =
     match (String.compare v1 v2, Int.compare b1 b2) with 0, n -> n | n, _ -> n
 
-  let to_string ((v, b) : t) = "(" ^ v ^ ", " ^ string_of_int b ^ ")"
+  let to_string (v, b) = "(" ^ v ^ ", " ^ string_of_int b ^ ")"
 end
 
 module PairValuedMap = Map.Make (Pair)
+module DestSet = Set.Make (Bril.Dest)
+
+let dests_written_to (func : Bril.Func.t) =
+  func |> Bril.Func.instrs (* include every variable ever defined *)
+  |> List.fold_left
+       (fun (set : DestSet.t) (instr : Bril.Instr.t) ->
+         match Bril.Instr.dest instr with
+         | None -> set
+         | Some dest -> DestSet.add dest set)
+       DestSet.empty
+  |> DestSet.union (* also include arguments to function *)
+       (func.args
+       |> List.fold_left (fun acc dest -> DestSet.add dest acc) DestSet.empty)
 
 (** [phi_nodes_of f] is a map taking a variable-block pair to a unique variable
     used to represent the variable at the phi node at the beginning of the
     block; naive implementation of SSA. *)
-let phi_nodes_of (func : Bril.Func.t) : string PairValuedMap.t =
-  let func_vars : StringSet.t =
-    func |> Bril.Func.instrs (* include every variable ever defined *)
-    |> List.fold_left
-         (fun (set : StringSet.t) (instr : Bril.Instr.t) ->
-           match Bril.Instr.dest instr with
-           | None -> set
-           | Some (var, _) -> StringSet.add var set)
-         StringSet.empty
-    |> StringSet.union (* also include arguments to function *)
-         (func.args
-         |> List.fold_left
-              (fun acc (arg, _) -> StringSet.add arg acc)
-              StringSet.empty)
-  in
+let phi_nodes_of (func : Bril.Func.t) : Bril.Dest.t PairValuedMap.t =
+  let func_dests = dests_written_to func in
   (* map every variable-basic block pair to a unique, local version of the variable *)
   func |> Basic_blocks.form_blocks |> Basic_blocks.just_blocks
   |> List.fold_left
-       (fun ((pair2unique, block_id) : string PairValuedMap.t * int) _ ->
+       (fun ((pair2unique, block_id) : Bril.Dest.t PairValuedMap.t * int) _ ->
          pair2unique
-         |> StringSet.fold
-              (fun (var : string) ->
+         |> DestSet.fold
+              (fun ((var, var_type) : Bril.Dest.t) ->
                 PairValuedMap.add (var, block_id)
-                  (var ^ "." ^ string_of_int block_id ^ ".1"))
-              func_vars
+                  (var ^ "." ^ string_of_int block_id ^ ".1", var_type))
+              func_dests
          |> fun x -> (x, block_id + 1))
        (PairValuedMap.empty, 1)
   |> fst
@@ -50,7 +50,7 @@ let phi_nodes_of (func : Bril.Func.t) : string PairValuedMap.t =
     is a total map from each original variable to the newest local variable
     created to represents that variable. This will be used to insert `set`
     nodes. *)
-let transform_block (block_id : int) (pair2unique : string PairValuedMap.t)
+let transform_block (block_id : int) (pair2unique : Bril.Dest.t PairValuedMap.t)
     (block : (int * Bril.Instr.t) list) :
     Bril.Instr.t list * string StringValuedMap.t =
   List.fold_left
@@ -92,9 +92,9 @@ let transform_block (block_id : int) (pair2unique : string PairValuedMap.t)
               ogvar2newestvar ))
     ( [],
       (* construct total mapping from og variable to newest local representation of
-              variable. *)
+          variable. *)
       PairValuedMap.fold
-        (fun ((og_var, block_id') : Pair.t) (new_var : string)
+        (fun ((og_var, block_id') : Pair.t) ((new_var, _) : Bril.Dest.t)
              (acc : string StringValuedMap.t) ->
           if block_id = block_id' then StringValuedMap.add og_var new_var acc
           else acc)
@@ -102,47 +102,86 @@ let transform_block (block_id : int) (pair2unique : string PairValuedMap.t)
     block
   |> fun (x, y) -> (List.rev x, y)
 
-let into_ssa (func : Bril.Func.t) : Bril.Func.t =
-  let pair2unique = phi_nodes_of func in
-  let x =
-    func |> Basic_blocks.form_blocks |> IntValuedMap.bindings
-    (* transform the block to use latest, local unique variable names *)
-    |> List.map
-         (fun ((block_id, indexed_block) : int * (int * Bril.Instr.t) list) ->
-           let transformed_block, latest_vars =
-             transform_block block_id pair2unique indexed_block
-           in
-           (block_id, transformed_block, latest_vars))
-    (* add get instructions at the beginning of every basic block *)
-    |> List.map
-         (fun
-           ((block_id, block_instrs, original2latest) :
-             int * Bril.Instr.t list * string StringValuedMap.t)
-         ->
-           []
-           |> PairValuedMap.fold
-                (fun (_, other_block_id) unique_local acc ->
-                  if block_id = other_block_id then unique_local :: acc else acc)
-                pair2unique
-           |> fun _ -> ())
+let func_into_ssa (func : Bril.Func.t) :
+    Bril.Func.t * ((string * string) * Bril.Bril_type.t) list =
+  let (pair2unique, basic_blocks, succs) :
+      Bril.Dest.t PairValuedMap.t * Basic_blocks.t * int list IntValuedMap.t =
+    ( phi_nodes_of func,
+      Basic_blocks.form_blocks func,
+      Cfg.(func |> construct_cfg |> succs) )
   in
-  func
+  let setargs2type : (string * string, Bril.Bril_type.t) Hashtbl.t =
+    Hashtbl.create
+      ((func |> dests_written_to |> DestSet.cardinal)
+      * IntValuedMap.cardinal basic_blocks
+      * 2)
+  in
+  basic_blocks |> IntValuedMap.bindings
+  (* transform the block to use latest, local unique variable names *)
+  |> List.map (fun (block_id, indexed_block) ->
+         let transformed_block, latest_vars =
+           transform_block block_id pair2unique indexed_block
+         in
+         (block_id, transformed_block, latest_vars))
+  (* add get instructions at the beginning of every basic block *)
+  |> List.map (fun (block_id, block_instrs, original2latest) ->
+         []
+         |> PairValuedMap.fold
+              (fun (_, other_block_id) unique_local acc ->
+                if block_id = other_block_id then unique_local :: acc else acc)
+              pair2unique
+         |> List.map (fun (dest : Bril.Dest.t) -> Bril.Instr.Get dest)
+         |> fun gets ->
+         ( block_id,
+           Basic_blocks.insert_top_of_block gets block_instrs,
+           original2latest ))
+  (* add get instructions at the beginning of every basic block *)
+  |> List.map (fun (block_id, block_instrs, original2latest) ->
+         List.map
+           (fun succ ->
+             pair2unique
+             |> PairValuedMap.filter (fun (_, other_block_id) _ ->
+                    succ = other_block_id)
+             |> PairValuedMap.bindings
+             |> List.map (fun ((original_var, _), (unique_var, var_type)) ->
+                    let set_args =
+                      ( unique_var,
+                        StringValuedMap.find original_var original2latest )
+                    in
+                    Hashtbl.add setargs2type set_args var_type;
+                    Bril.Instr.Set (fst set_args, snd set_args)))
+           (match IntValuedMap.find_opt block_id succs with
+           | None -> []
+           | Some lst -> lst)
+         |> List.concat
+         |> fun sets -> Basic_blocks.insert_bottom_of_block sets block_instrs)
+  |> List.concat
+  |> fun instrs ->
+  (func.args
+  |> List.map (fun (arg, arg_type) ->
+         let set_args = (arg ^ ".1.1", arg) in
+         Hashtbl.add setargs2type set_args arg_type;
+         Bril.Instr.Set (arg ^ ".1.1", arg)))
+  @ instrs
+  |> Bril.Func.set_instrs func
+  |> fun x -> (x, Hashtbl.to_seq setargs2type |> List.of_seq)
 
-let test_fn (func : Bril.Func.t) : unit =
-  let blocks = Basic_blocks.form_blocks func in
-  let pair2unique = phi_nodes_of func in
-  print_endline "pair2unique:";
-  PairValuedMap.iter
-    (fun (p : Pair.t) (new_var : string) ->
-      print_endline ("  " ^ Pair.to_string p ^ ": " ^ new_var))
-    pair2unique;
-  print_endline "";
-  IntValuedMap.empty
-  |> IntValuedMap.fold
-       (fun block_id block new_map ->
-         IntValuedMap.add block_id
-           (block |> transform_block block_id pair2unique |> fst)
-           new_map)
-       blocks
-  |> IntValuedMap.bindings |> List.map snd |> List.concat
-  |> Bril.Func.set_instrs func |> Bril.Func.to_string |> print_endline
+let func_out_of_ssa (func : Bril.Func.t)
+    (set2type : ((string * string) * Bril.Bril_type.t) list) : Bril.Func.t =
+  func |> Bril.Func.instrs
+  |> List.filter (function Bril.Instr.Get _ -> false | _ -> true)
+  |> List.map (function
+       | Bril.Instr.Set (arg1, arg2) ->
+           let var_type = List.assoc (arg1, arg2) set2type in
+           Bril.Instr.Unary ((arg1, var_type), Bril.Op.Unary.Id, arg2)
+       | other_instr -> other_instr)
+  |> Bril.Func.set_instrs func
+
+let into_ssa = List.map (fun func -> func |> func_into_ssa |> fst)
+
+let roundtrip (prog : Bril.t) : Bril.t =
+  List.map
+    (fun (func : Bril.Func.t) ->
+      let ssa_func, set_types = func_into_ssa func in
+      func_out_of_ssa ssa_func set_types)
+    prog

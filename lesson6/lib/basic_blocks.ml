@@ -7,6 +7,23 @@ let just_blocks (blocks : t) : Bril.Instr.t list list =
   blocks |> Utils.IntValuedMap.to_list
   |> List.map (fun pair -> pair |> snd |> List.map snd)
 
+let insert_top_of_block (instrs : Bril.Instr.t list) = function
+  | [] -> instrs
+  | h :: t -> (
+      match h with
+      | Bril.Instr.Label _ -> h :: (instrs @ t)
+      | _ -> instrs @ (h :: t))
+
+let insert_bottom_of_block (instrs : Bril.Instr.t list)
+    (block : Bril.Instr.t list) =
+  match List.rev block with
+  | [] -> instrs
+  | final_instr :: front -> (
+      match final_instr with
+      | Bril.Instr.Ret _ | Bril.Instr.Br _ | Bril.Instr.Jmp _ ->
+          List.rev front @ instrs @ [ final_instr ]
+      | _ -> block @ instrs)
+
 (** [form_blocks f] is a map from indices of basic blocks to the list of
     instructions forming the block, formed from the function [f]. *)
 let form_blocks (func : Bril.Func.t) : t =
