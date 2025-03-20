@@ -123,6 +123,70 @@ let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
   in
   compute_loop_invariants PairSet.empty
 
+let insert_preheaders (func : Bril.Func.t) : Bril.Func.t =
+  func |> natural_loops_of
+  |> List.fold_left
+       (fun ((func, loop_id) : Bril.Func.t * int) natural_loop ->
+         let _, dominator = natural_loop.backedge in
+         let blocks_in_natural_loop = natural_loop.blocks in
+         let basic_blocks = Basic_blocks.form_blocks func in
+
+         let preds = Cfg.(func |> construct_cfg |> preds) in
+         match IntValuedMap.find_opt dominator preds with
+         | None | Some [] | Some [ _ ] -> (func, loop_id + 1)
+         | _ ->
+             let dominator_label =
+               match
+                 basic_blocks |> IntValuedMap.find dominator |> List.hd |> snd
+               with
+               | Bril.Instr.Label lbl -> lbl
+               | _ ->
+                   Stdlib.failwith
+                     "Unreachable: No label for the dominating block in this \
+                      backedge. "
+             in
+             let preheader_label = "preheader" ^ string_of_int loop_id in
+             let loop_preheader =
+               [
+                 Bril.Instr.Label preheader_label;
+                 Bril.Instr.Jmp dominator_label;
+               ]
+             in
+             (* set all jumps to dominator label to instead jump to preheader label*)
+             let new_instrs =
+               (basic_blocks |> IntValuedMap.bindings
+               |> List.concat_map (fun (block_id, identified_instrs) ->
+                      List.map
+                        (fun (instr_id, instr) -> (block_id, instr_id, instr))
+                        identified_instrs)
+               |> List.map (fun (block_id, _, instr) ->
+                      if List.mem block_id blocks_in_natural_loop then instr
+                      else
+                        match instr with
+                        | Bril.Instr.Jmp some_label ->
+                            if some_label = dominator_label then
+                              Bril.Instr.Jmp preheader_label
+                            else instr
+                        | Bril.Instr.Br (cond, some_label1, some_label2) ->
+                            let label1_equal = some_label1 = dominator_label in
+                            let label2_equal = some_label2 = dominator_label in
+                            if label1_equal && label2_equal then
+                              Bril.Instr.Br
+                                (cond, preheader_label, preheader_label)
+                            else if label1_equal then
+                              Bril.Instr.Br (cond, preheader_label, some_label2)
+                            else if label2_equal then
+                              Bril.Instr.Br (cond, some_label1, preheader_label)
+                            else instr
+                        | _ -> instr))
+               @ loop_preheader
+             in
+             (Bril.Func.set_instrs func new_instrs, loop_id + 1))
+       (func, 0)
+  |> fst
+
+let transform (func : Bril.Func.t) : Bril.Func.t = func
+
 (* --------------------------------------------------------------------------- *)
 (*                         BEGIN TESTING FUNCTIONS                             *)
 (* --------------------------------------------------------------------------- *)
@@ -152,4 +216,5 @@ let print_reaching_defs (func : Bril.Func.t) : unit =
          |> print_endline);
   print_endline ""
 
-let transform (func : Bril.Func.t) : Bril.Func.t = func
+let print_insert_preheaders (func : Bril.Func.t) : unit =
+  func |> insert_preheaders |> Bril.Func.to_string |> print_endline

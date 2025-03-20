@@ -32,7 +32,7 @@ let iter_func (f : Bril.Func.t -> unit) : unit =
   |> Bril.from_json |> List.iter f
 
 let () =
-  iter_func (fun f -> f |> insert_dummy |> Lesson8.Licm.print_reaching_defs)
+  iter_func (fun f -> f |> insert_dummy |> Lesson8.Licm.print_insert_preheaders)
 
 (* let () =
   In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
