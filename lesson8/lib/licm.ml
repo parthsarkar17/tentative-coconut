@@ -27,7 +27,8 @@ let backedges_of (func : Bril.Func.t) : (int * int) list =
     natural loops found in the Bril function [f]. *)
 let natural_loops_of (func : Bril.Func.t) : loop list =
   (* performs dfs to find all parts of the loop that reach the tail *)
-  let rec reaches_tail visited graph = function
+  let rec reaches_tail (visited : IntSet.t) (graph : int list IntValuedMap.t) :
+      int list -> IntSet.t = function
     | [] -> visited
     | h :: t ->
         if IntSet.mem h visited then reaches_tail visited graph t
@@ -53,6 +54,75 @@ let natural_loops_of (func : Bril.Func.t) : loop list =
                 |> IntSet.to_list);
          })
 
+let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
+    (reaching_defs : Reaching_analysis.DefinitionSet.t IntValuedMap.t)
+    (natural_loop : loop) : PairSet.t =
+  let instrs_in_loop =
+    natural_loop.blocks
+    |> List.concat_map (fun (block_id : int) ->
+           basic_blocks |> IntValuedMap.find block_id
+           |> List.map (fun (instr_id, instr) -> (block_id, instr_id, instr)))
+  in
+  let rec compute_loop_invariants (loop_invariants : PairSet.t) : PairSet.t =
+    let new_loop_invariants, changed =
+      List.fold_left
+        (fun ((loop_invariants, changed) : PairSet.t * bool)
+             ((block_id, instr_id, instr) : int * int * Bril.Instr.t) ->
+          (* The definitions reaching this [instr] are the reaching defs from 
+          previous blocks (i.e. the in-flow to block [block_id], united with the 
+          definitions from [block_id] itself, up to and not including [instr]). *)
+          let defs_reaching_instr =
+            Reaching_analysis.DefinitionSet.union
+              (IntValuedMap.find block_id reaching_defs)
+              (basic_blocks |> IntValuedMap.find block_id
+              |> List.filter_map (fun (instr_id', instr') ->
+                     match (instr_id' < instr_id, Bril.Instr.dest instr') with
+                     | false, _ | _, None -> None
+                     | true, Some ((dest_var, _) : Bril.Dest.t) ->
+                         Some (block_id, instr_id', dest_var))
+              |> List.fold_left
+                   (fun acc elt -> Reaching_analysis.DefinitionSet.add elt acc)
+                   Reaching_analysis.DefinitionSet.empty)
+          in
+          let instr_is_loop_invariant : bool =
+            instr |> Bril.Instr.args
+            |> List.for_all (fun (arg : string) ->
+                   let reaching_defs_of_arg =
+                     Reaching_analysis.DefinitionSet.filter
+                       (fun (_, _, dest) -> dest = arg)
+                       defs_reaching_instr
+                   in
+                   let all_reaching_defs_outside_loop =
+                     Reaching_analysis.DefinitionSet.for_all
+                       (fun (block_id', _, _) ->
+                         not (List.mem block_id' natural_loop.blocks))
+                       reaching_defs_of_arg
+                   in
+                   let one_loop_invariant_def =
+                     Reaching_analysis.DefinitionSet.cardinal
+                       reaching_defs_of_arg
+                     = 1
+                     && Reaching_analysis.DefinitionSet.for_all
+                          (fun (block_id', instr_id', _) ->
+                            PairSet.mem (block_id', instr_id') loop_invariants)
+                          reaching_defs_of_arg
+                   in
+                   all_reaching_defs_outside_loop || one_loop_invariant_def)
+          in
+          if instr_is_loop_invariant then
+            let new_loop_invariants =
+              PairSet.add (block_id, instr_id) loop_invariants
+            in
+            ( new_loop_invariants,
+              changed || PairSet.equal new_loop_invariants loop_invariants )
+          else (loop_invariants, changed))
+        (PairSet.empty, false) instrs_in_loop
+    in
+    if changed then compute_loop_invariants new_loop_invariants
+    else loop_invariants
+  in
+  compute_loop_invariants PairSet.empty
+
 (* --------------------------------------------------------------------------- *)
 (*                         BEGIN TESTING FUNCTIONS                             *)
 (* --------------------------------------------------------------------------- *)
@@ -68,5 +138,18 @@ let print_natural_loops (func : Bril.Func.t) : unit =
   |> List.map (fun { blocks; _ } ->
          blocks |> List.map string_of_int |> String.concat " ")
   |> String.concat "\n" |> print_endline
+
+let print_reaching_defs (func : Bril.Func.t) : unit =
+  print_endline func.name;
+  func |> Reaching_analysis.reaching_defs_of |> fst
+  |> IntValuedMap.iter (fun block_id set ->
+         string_of_int block_id ^ ": "
+         ^ (set |> Reaching_analysis.DefinitionSet.to_list
+           |> List.map (fun (x, y, z) ->
+                  "(" ^ string_of_int x ^ ", " ^ string_of_int y ^ ", " ^ z
+                  ^ ")")
+           |> String.concat "; ")
+         |> print_endline);
+  print_endline ""
 
 let transform (func : Bril.Func.t) : Bril.Func.t = func
