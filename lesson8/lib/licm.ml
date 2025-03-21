@@ -54,6 +54,9 @@ let natural_loops_of (func : Bril.Func.t) : loop list =
                 |> IntSet.to_list);
          })
 
+(** [loop_invariant_instrs_of] computes a set of instruction IDs (a tuple
+    consisting of a block ID and a local-to-block instruction ID) to represent
+    the set of instructions that are loop invariant. *)
 let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
     (reaching_defs : Reaching_analysis.DefinitionSet.t IntValuedMap.t)
     (natural_loop : loop) : PairSet.t =
@@ -63,6 +66,7 @@ let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
            basic_blocks |> IntValuedMap.find block_id
            |> List.map (fun (instr_id, instr) -> (block_id, instr_id, instr)))
   in
+  (* recurse till convergence *)
   let rec compute_loop_invariants (loop_invariants : PairSet.t) : PairSet.t =
     let new_loop_invariants =
       List.fold_left
@@ -95,12 +99,14 @@ let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
                            (fun (_, _, dest) -> dest = arg)
                            defs_reaching_instr
                        in
+                       (* first way to have loop invariance *)
                        let all_reaching_defs_outside_loop =
                          Reaching_analysis.DefinitionSet.for_all
                            (fun (block_id', _, _) ->
                              not (List.mem block_id' natural_loop.blocks))
                            reaching_defs_of_arg
                        in
+                       (* second way to have loop invariance *)
                        let one_loop_invariant_def =
                          Reaching_analysis.DefinitionSet.cardinal
                            reaching_defs_of_arg
@@ -111,6 +117,7 @@ let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
                                   loop_invariants)
                               reaching_defs_of_arg
                        in
+                       (* TWO-WAY ENTRY TO MARKING SOMETHING AS LOOP INVARIANT *)
                        all_reaching_defs_outside_loop || one_loop_invariant_def)
           in
           if instr_is_loop_invariant then
@@ -121,12 +128,18 @@ let loop_invariant_instrs_of (basic_blocks : Basic_blocks.t)
           else loop_invariants)
         PairSet.empty instrs_in_loop
     in
+    (* iterate till convergence *)
     if not (PairSet.equal new_loop_invariants loop_invariants) then
       compute_loop_invariants new_loop_invariants
     else loop_invariants
   in
   compute_loop_invariants PairSet.empty
 
+(** [insert_preheaders func] is a [Bril.Func.t] where, for every natural loop in
+    the CFG of [func], we insert a preheader to the entry of the natural loop in
+    order to have a destination in which to place LICM-ified instructions. This
+    preheader is placed directly before the entry point of the natural loop
+    (i.e. block_id - 1). *)
 let insert_preheaders (func : Bril.Func.t) : Bril.Func.t =
   func |> natural_loops_of
   |> List.fold_left
@@ -155,7 +168,8 @@ let insert_preheaders (func : Bril.Func.t) : Bril.Func.t =
                  Bril.Instr.Jmp dominator_label;
                ]
              in
-             (* set all jumps to dominator label to instead jump to preheader label*)
+             (* set all jumps to dominator label to instead jump to preheader label,
+             except for those within the natural loop. *)
              let instrs_before_preheader, instrs_after_preheader =
                basic_blocks |> IntValuedMap.bindings
                |> List.concat_map (fun (block_id, identified_instrs) ->
@@ -166,6 +180,7 @@ let insert_preheaders (func : Bril.Func.t) : Bril.Func.t =
                       let new_instr =
                         if List.mem block_id blocks_in_natural_loop then instr
                         else
+                          (* ungainly logic that just swaps labels *)
                           match instr with
                           | Bril.Instr.Jmp some_label ->
                               if some_label = dominator_label then
@@ -193,18 +208,17 @@ let insert_preheaders (func : Bril.Func.t) : Bril.Func.t =
                       (block_id, instr_id, new_instr))
                |> List.partition (fun (block_id, _, _) -> block_id < dominator)
              in
-             let strip_indexes lst =
-               List.map (fun (_, _, instr) -> instr) lst
-             in
-             let new_instrs =
-               strip_indexes instrs_before_preheader
-               @ loop_preheader
-               @ strip_indexes instrs_after_preheader
-             in
-             (Bril.Func.set_instrs func new_instrs, loop_id + 1))
+             let strip_indexes = List.map (fun (_, _, instr) -> instr) in
+             ( Bril.Func.set_instrs func
+                 (* place loop preheader *)
+                 (strip_indexes instrs_before_preheader
+                 @ loop_preheader
+                 @ strip_indexes instrs_after_preheader),
+               loop_id + 1 ))
        (func, 0)
   |> fst
 
+(** [transform func] is a [Bril.Func.t] that has undergone the LICM pass. *)
 let transform (func : Bril.Func.t) : Bril.Func.t =
   let func_with_preheaders = insert_preheaders func in
   let basic_blocks, reaching_defs, natural_loops, block2dominated, succs_map =
@@ -231,12 +245,11 @@ let transform (func : Bril.Func.t) : Bril.Func.t =
              let all_dominated_blocks =
                IntValuedMap.find block_id block2dominated
              in
+             (* first condition *)
              let definition_dominates_uses =
                IntSet.subset blocks_where_used all_dominated_blocks
              in
-             (* print_endline
-               ("definition dominates its uses:"
-               ^ string_of_bool definition_dominates_uses); *)
+             (* second condition *)
              let is_unique_definition =
                natural_loop.blocks
                |> List.fold_left
@@ -259,8 +272,7 @@ let transform (func : Bril.Func.t) : Bril.Func.t =
                     0
                |> ( = ) 1
              in
-             (* print_endline
-               ("definition is unique:" ^ string_of_bool is_unique_definition); *)
+             (* third condition *)
              let definition_dominates_loop_exits =
                natural_loop.blocks
                |> List.concat_map (fun (loop_block_id : int) ->
@@ -275,9 +287,7 @@ let transform (func : Bril.Func.t) : Bril.Func.t =
                |> List.for_all (fun (loop_exit : int) ->
                       IntSet.mem loop_exit all_dominated_blocks)
              in
-             (* print_endline
-               ("definition dominates loop exits:"
-               ^ string_of_bool definition_dominates_loop_exits); *)
+             (* THREE-PART CONDITION TO MOVE INSTRUCTION HERE *)
              if
                definition_dominates_uses && is_unique_definition
                && definition_dominates_loop_exits
