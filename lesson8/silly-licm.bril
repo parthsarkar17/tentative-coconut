@@ -1,0 +1,21 @@
+@main {
+.__b0:
+  n: int = const 45;
+  i: int = id n;
+  two: int = const 2;
+  one: int = const 1;
+  zero: int = const 0;
+  sum: int = id zero;
+.preheader0:
+  stride: int = mul two n;
+  jmp .cond;
+.cond:
+  continueloop: bool = gt i zero;
+  br continueloop .loop.body .return;
+.loop.body:
+  sum: int = add sum stride;
+  i: int = sub i one;
+  jmp .cond;
+.return:
+  print sum;
+}

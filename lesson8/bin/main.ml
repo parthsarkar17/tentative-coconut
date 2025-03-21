@@ -27,16 +27,16 @@ let insert_dummy (func : Bril.Func.t) : Bril.Func.t =
       Bril.Func.set_instrs func
         (Bril.Instr.Label "entry1" :: dummy_block_contents)
 
-let iter_func (f : Bril.Func.t -> unit) : unit =
+let _iter_func (f : Bril.Func.t -> unit) : unit =
   In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
   |> Bril.from_json |> List.iter f
 
-let () =
-  iter_func (fun f -> f |> insert_dummy |> Lesson8.Licm.print_insert_preheaders)
-
 (* let () =
+  iter_func (fun f -> f |> insert_dummy |> Lesson8.Licm.print_insert_preheaders) *)
+
+let () =
   In_channel.stdin |> In_channel.input_all |> Yojson.Basic.from_string
   |> Bril.from_json
   |> List.map (fun func -> func |> insert_dummy |> Lesson8.Licm.transform)
   |> Bril.to_json |> Yojson.Basic.to_string
-  |> Out_channel.output_string Out_channel.stdout *)
+  |> Out_channel.output_string Out_channel.stdout
