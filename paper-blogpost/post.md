@@ -11,11 +11,12 @@ design space for GCs and better select the best GC strategy for a particular app
 
 ## Qualitative analysis
 By presenting tracing and RC as duals, the authors introduce a novel mental model for approaching garbage collectors. 
-Specifically, tracing operates on live objects (“matter”), while RC operates on dead objects (“anti-matter”). 
+Specifically, tracing operates on live objects (“matter”), while RC operates on dead objects (“anti-matter”). Concretely, tracing initializes reference counts to 0 (an underestimate of the true count), *incrementing* them during graph traversal until they reach the true count. On the other hand, RC initializes reference counts to an overestimate of the true count, *decrementing* them during graph traversal until they reach the true count (ignoring cycles). (With RC, we start with an overestimate since we count in-edges from objects that are no longer live.) 
 
-Tracing initializes reference counts to 0 (an underestimate of the true count), incrementing them during graph traversal until they reach the true count. On the other hand, RC initializes reference counts to an overestimate of the true count, decrementing them during graph traversal until they reach the true count (ignoring cycles). 
+In addition, the authors formulate garbage collection as a fix-point problem, and they demonstrate that 
+tracing computes the *least* fix point, while RC computes the *greatest* fix point, with their set difference being cyclic garbage.
 
-The authors also identify several key characteristics they use to describe each algorithm:
+The authors also identify several key characteristics of each algorithm:
 | | Tracing | RC |
 | --- | --- | --- |
 | Starting point | Roots | Anti-roots |
@@ -28,7 +29,7 @@ With this formulation, the parallels between each algorithm become clear.
 TODO
 
 ## Cost model
-The authors also present a formal cost model for comparing collectors. Specifically, they introduce:
+The authors also present a formal cost model for comparing the performance characteristics of different collectors. Specifically, they introduce:
 - $\kappa$, the time overhead for a single garbage collection
 - $\sigma$, the space overhead for a single garbage collection
 - $\phi$, the frequency of collection
@@ -36,7 +37,7 @@ The authors also present a formal cost model for comparing collectors. Specifica
 - $\tau$, the total time overhead for an entire program
 
 Notably, the authors mention that these quantities represent "real costs with implied coefficients", as opposed to 
-idealized big-Oh notation. Using these quantities, the authors are able to compare the hybrid collectors they developed.
+idealized big-Oh notation. Crucially, the authors claim that their cost model accounts for space-time tradeoffs and allows for an somewhat realistic, "apples-to-apples" comparison of different collectors' performance. 
 
 # Merits
 
@@ -72,9 +73,10 @@ change in the graph (or, indeed, mark-and-sweeping every so often); instead,
 there could be pointers into and out of the _space as a whole_, clearly outlining
 when to free this large chunk of space. 
 
-(Side note: a while after this point was brought up, it occurred to me that this 
+(Side note: a while after this point was brought up, it occurred to us that this 
 is close to what a programmer would do to manually manage memory. It seems buggy
 to free individual nodes during processing, so they might just free the whole
 section when they're sure they've finished their computation. This goes back to
 a meta-discussion-point about how there's still GC research to be done to fill the gap
 between automatic, GC-managed memory and manual memory management).
+
