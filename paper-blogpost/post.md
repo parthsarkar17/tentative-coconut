@@ -39,3 +39,33 @@ Regarding (2), we wondered how useful an abstract cost model is given that progr
 Both of these concerns make us doubtful about the practicality of the proposed cost model. While it is an elegant abstraction and we appreciated the way the authors used it to compare their collectors, it would have been nice to see quantitative support for their comparisons.
 
 # Connections to state of the art
+An interesting thread of the discussion led some folks to the idea that the programmer
+could play a bigger role in garbage collection, instead of the more abstract interface
+that the mainstream paradigm provides. If a language implementation breaks
+down some of the existing abstractions, collection could be more "domain-specific",
+letting the compiler know which algorithms and hybrids to use on particular data structures
+or sections of memory, how often to collect, or generally providing useful compile-time
+guarantees.
+
+A great example was the idea that standard library data structures could come
+with programmer-facing guarantees on the GC's behavior. In this language, the user
+might explicitly choose to use specific data structures because they have the 
+guarantee of being reference-counted, for example, avoiding larger pauses. 
+
+One other instance of breaking existing abstractions, this time relying slightly more on 
+the programmer, is the idea that there should be a fundamental separation between 
+"regions of memory" and "objects to free". In particular, the user should be able to 
+operate on some allocated space with the guarantee that the collecter will not 
+collect objects in that space until directed by the programmer. For example,
+if the program is operating on a graph, and all nodes are constantly active,
+it would be wasteful to increment and decrement reference counts for every
+change in the graph (or, indeed, mark-and-sweeping every so often); instead, 
+there could be pointers into and out of the _space as a whole_, clearly outlining
+when to free this large chunk of space. 
+
+(Side note: a while after this point was brought up, it occurred to me that this 
+is close to what a programmer would do to manually manage memory. It seems buggy
+to free individual nodes during processing, so they might just free the whole
+section when they're sure they've finished their computation. This goes back to
+a meta-discussion-point about how there's still GC research to be done to fill the gap
+between automatic, GC-managed memory and manual memory management).
