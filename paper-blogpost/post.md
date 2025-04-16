@@ -51,11 +51,11 @@ The authors also present a formal cost model for comparing the performance chara
 Notably, the authors mention that these quantities represent "real costs with implied coefficients", as opposed to 
 idealized big-Oh notation. Crucially, the authors claim that their cost model accounts for space-time tradeoffs and allows for an somewhat realistic, "apples-to-apples" comparison of different collectors' performance. 
 
-# Merits
-<!-- TODO: link this to the rest of the section -->
+# Merits & Shortcomings
+Many people in class found the formulation of tracing and RC as algorithmic duals to be particularly elegant.
+Additionally, we found their classification of different GC strategies based on how they use tracing/RC on different regions to be a 
+succinct way to highlight the conceptual differences between different non-trivial GC regimes. 
 
-
-# Shortcomings
 Part of our discussion focused on two aspects of the authors' cost model: (1) its accuracy, and (2) its utility. Regarding (1), we decided we would have liked to see a quantitative analysis of the cost model with actual benchmarks. While it seems like an elegant abstraction, we can't know for sure if the introduced model accounts for all variations between collectors, or at least the important ones. Additionally, we were interested about the impact of the model's assumptions -- it treats the allocation rate and the garbage fraction of the heap as constants. We would have liked to know how accurate the cost model is in cases where these assumptions don't hold. Evaluating various hybrid collectors on a set of benchmarks with varying allocation rates and garbage fractions would have answered these questions.
 
 Regarding (2), we wondered how useful an abstract cost model is given that programmers would likely benchmark their application with different collectors if they were really concerned about garbage collection as a performance bottleneck.
