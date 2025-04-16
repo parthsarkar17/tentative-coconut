@@ -23,10 +23,22 @@ The authors also identify several key characteristics of each algorithm:
 | Graph traversal | Forward from roots | Forward from anti-roots | 
 | Objects traversed | Live | Dead |
 
-With this formulation, the parallels between each algorithm become clear.
+With this in mind, the authors leave the reader with 3 considerations to keep in mind when designing a new GC algorithm:
+1. **Partition**: Should memory be divided into different regions which are each subjected to (possibly different) strategies?
+2. **Traversal**: For each partition, should tracing or RC be used?
+3. **Trade-offs**: For each partition, decide how to handle space-time trade-offs
 
 ## Hybrid collectors
-TODO
+The authors demonstrate that in practice, various GC strategies lie on a continuum between tracing and RC. For example, 
+
+For collectors where there is a *unified heap* (i.e. a single heap in which all data resides), we have:
+- **Deferred RC (DRC)**: References from the stack to the heap are traced, while references within the heap are reference-counted
+- **Partial tracing**: Converse of DRC, i.e. reference-count roots and trace the heap
+
+For generational GCs, where the heap is split into a nursery and a mature space, we have variations where:
+- both the nursery and mature space are traced (standard generational GC)
+- the nursery is RCed and the mature space is traced 
+- the nursery is traced and the mature space is reference-counted (Ulterior Reference Counting)
 
 ## Cost model
 The authors also present a formal cost model for comparing the performance characteristics of different collectors. Specifically, they introduce:
@@ -40,6 +52,8 @@ Notably, the authors mention that these quantities represent "real costs with im
 idealized big-Oh notation. Crucially, the authors claim that their cost model accounts for space-time tradeoffs and allows for an somewhat realistic, "apples-to-apples" comparison of different collectors' performance. 
 
 # Merits
+<!-- TODO: link this to the rest of the section -->
+
 
 # Shortcomings
 Part of our discussion focused on two aspects of the authors' cost model: (1) its accuracy, and (2) its utility. Regarding (1), we decided we would have liked to see a quantitative analysis of the cost model with actual benchmarks. While it seems like an elegant abstraction, we can't know for sure if the introduced model accounts for all variations between collectors, or at least the important ones. Additionally, we were interested about the impact of the model's assumptions -- it treats the allocation rate and the garbage fraction of the heap as constants. We would have liked to know how accurate the cost model is in cases where these assumptions don't hold. Evaluating various hybrid collectors on a set of benchmarks with varying allocation rates and garbage fractions would have answered these questions.
@@ -65,7 +79,7 @@ guarantee of being reference-counted, for example, avoiding larger pauses.
 One other instance of breaking existing abstractions, this time relying slightly more on 
 the programmer, is the idea that there should be a fundamental separation between 
 "regions of memory" and "objects to free". In particular, the user should be able to 
-operate on some allocated space with the guarantee that the collecter will not 
+operate on some allocated space with the guarantee that the collector will not 
 collect objects in that space until directed by the programmer. For example,
 if the program is operating on a graph, and all nodes are constantly active,
 it would be wasteful to increment and decrement reference counts for every
