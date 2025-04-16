@@ -1,24 +1,31 @@
 # Background
-This week we read [A Unified Theory of Garbage Collection](https://dl.acm.org/doi/10.1145/1028976.1028982), 
-from OOPSLA 2004.  
+This week, we read [A Unified Theory of Garbage Collection](https://dl.acm.org/doi/10.1145/1028976.1028982) by Bacon et al. from OOPSLA 2004.  
 
-The two main garbage collection algorithms are tracing (also known as mark-and-sweep) and reference counting. They each present distinct performance tradeoffs -- a tracing collector will pause execution of the program to scan the entire heap at once, whereas a reference counting collector incurs shorter pause times by incrementally tracking objects. However, reference counting collectors require some extra machinery for tracking cycles. 
+Garbage collection, a form of automatic memory management, frees programmers from needing to deallocate memory themselves. 
+The two main garbage collection algorithms are tracing (also known as mark-and-sweep) and reference counting (RC). They each present distinct performance tradeoffs -- a tracing collector (e.g. the [Java Virtual Machine](https://stackoverflow.com/questions/65312024/why-are-jvm-garbage-collectors-trace-based)'s collector) will pause execution of the program to scan the entire heap at once, whereas a reference counting collector (e.g. [CPython](https://github.com/python/cpython/blob/main/InternalDocs/garbage_collector.md)'s collector) incurs shorter pause times by incrementally tracking objects. However, reference counting collectors require some extra machinery for tracking cycles. 
 
-The paper's main argument is that these two algorithms, while traditionally viewed as entirely distinct, are actually algorithmic duals. The authors claim that they share a deep underlying structure that becomes apparent when optimizing each type of collector. 
+The paper's central thesis is that tracing and RC, although traditionally viewed as being entirely distinct, are actually algorithmic duals. Moreover, the authors demonstrate how various (more sophisticated) GC strategies, such as generational garbage collection, can be viewed as hybrids of tracing and RC. The authors argue that this notion of duality allows one to "systematically" explore the 
+design space for GCs and better select the best GC strategy for a particular application. 
 
 # Contributions
 
 ## Qualitative analysis
-By presenting tracing and RC as duals, the authors introduce a novel mental model for approaching garbage collectors. They identify several key characteristics they use to describe each algorithm:
+By presenting tracing and RC as duals, the authors introduce a novel mental model for approaching garbage collectors. 
+Specifically, tracing operates on live objects (“matter”), while RC operates on dead objects (“anti-matter”). 
+
+Tracing initializes reference counts to 0 (an underestimate of the true count), incrementing them during graph traversal until they reach the true count. On the other hand, RC initializes reference counts to an overestimate of the true count, decrementing them during graph traversal until they reach the true count (ignoring cycles). 
+
+The authors also identify several key characteristics they use to describe each algorithm:
 | | Tracing | RC |
 | --- | --- | --- |
 | Starting point | Roots | Anti-roots |
-| Graph traversal | Fwd from roots | Fwd from anti-roots | 
+| Graph traversal | Forward from roots | Forward from anti-roots | 
 | Objects traversed | Live | Dead |
 
 With this formulation, the parallels between each algorithm become clear.
 
 ## Hybrid collectors
+TODO
 
 ## Cost model
 The authors also present a formal cost model for comparing collectors. Specifically, they introduce:
@@ -27,7 +34,9 @@ The authors also present a formal cost model for comparing collectors. Specifica
 - $\phi$, the frequency of collection
 - $\mu$, the mutation overhead
 - $\tau$, the total time overhead for an entire program
-Using these quantities, the authors are able to compare the hybrid collectors they developed.
+
+Notably, the authors mention that these quantities represent "real costs with implied coefficients", as opposed to 
+idealized big-Oh notation. Using these quantities, the authors are able to compare the hybrid collectors they developed.
 
 # Merits
 
