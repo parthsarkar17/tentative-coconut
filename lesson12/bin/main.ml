@@ -26,12 +26,20 @@ let get_trace (interpreter_binary_path : string) (program_path : string)
 
 module StringMap = Map.Make (String)
 
+(** Filters a trace to get it ready for insertion back into the Bril program. In
+    particular, A) Get rid of Jump instructions, B) Change Branch instructions
+    to Guard instructions (If the trace takes the true branch, then the Guard is
+    as simple as copying the boolean used in the Branch. If it takes the false
+    branch, we need to create and use a variable representing the not() of the
+    boolean used in the branch). We leave everything else as-is. *)
 let filter_trace (terminating_instr : Bril.Instr.t) (guard_label : string)
     (label_map : Bril.Instr.t StringMap.t) (trace : Bril.Instr.t list) :
     Bril.Instr.t list =
   let rec filter_trace_aux (acc : Bril.Instr.t list) :
       Bril.Instr.t list -> Bril.Instr.t list = function
     | [] -> acc
+    (* need two consecutive instructions in case the first instruction is a branch; 
+    if this is the case, we'd need to know which of the true/false branch is taken. *)
     | fst :: snd :: rest -> (
         match fst with
         | Bril.Instr.Jmp _ | Bril.Instr.Label _ ->
@@ -53,26 +61,24 @@ let filter_trace (terminating_instr : Bril.Instr.t) (guard_label : string)
                 (Bril.Instr.Guard (not_guard_var_name, guard_label)
                 :: not_guard :: acc)
                 (snd :: rest)
-              (* filter_trace_aux
-              (Bril.Instr.Guard (guard, guard_label) :: acc)
-              trace_rest *)
         | _ ->
             if fst = terminating_instr then acc
             else filter_trace_aux (fst :: acc) (snd :: rest))
-    | trace_head :: trace_rest -> (
+    (* the case in which there's only one instruction left in the trace *)
+    | trace_head :: [] -> (
         match trace_head with
-        | Bril.Instr.Jmp _ | Bril.Instr.Label _ ->
-            filter_trace_aux acc trace_rest
+        | Bril.Instr.Jmp _ | Bril.Instr.Label _ -> filter_trace_aux acc []
         | Bril.Instr.Br (guard, _, _) ->
-            filter_trace_aux
-              (Bril.Instr.Guard (guard, guard_label) :: acc)
-              trace_rest
+            filter_trace_aux (Bril.Instr.Guard (guard, guard_label) :: acc) []
         | _ ->
             if trace_head = terminating_instr then acc
-            else filter_trace_aux (trace_head :: acc) trace_rest)
+            else filter_trace_aux (trace_head :: acc) [])
   in
   trace |> filter_trace_aux [] |> List.rev
 
+(** Take the filtered trace and inject it into the beginning of the given
+    function. We need to pad the trace with Speculate and Commit, and also a
+    Jump to a part of the code if the trace code ends up being commited. *)
 let insert_into (program_path : string) (program_args : string)
     (label_map : Bril.Instr.t StringMap.t) (func : Bril.Func.t) : Bril.Func.t =
   let trace =
@@ -92,6 +98,9 @@ let insert_into (program_path : string) (program_args : string)
   in
   Bril.Func.set_instrs func new_instrs
 
+(** Provides a map from labels to the first instruction after the label. This is
+    used in order to determine which of the true/false branches are taken in a
+    trace. *)
 let build_map (func : Bril.Func.t) : Bril.Instr.t StringMap.t =
   let rec build_map_aux (instr_list : Bril.Instr.t list)
       (acc : Bril.Instr.t StringMap.t) : Bril.Instr.t StringMap.t =
@@ -105,19 +114,19 @@ let build_map (func : Bril.Func.t) : Bril.Instr.t StringMap.t =
   in
   build_map_aux (Bril.Func.instrs func) StringMap.empty
 
-let run (program_path : string) (program_args : string) : unit =
+(** Entry point *)
+let run (program_path : string) (program_default_args : string) : unit =
   let program : Bril.t =
     "/Users/parthsarkar/.local/bin/bril2json < " ^ program_path
     |> Unix.open_process_in |> In_channel.input_all |> Yojson.Basic.from_string
     |> Bril.from_json
   in
-
   let main : Bril.Func.t =
     List.find (fun (func : Bril.Func.t) -> func.name = "main") program
   in
   let label2first_instr = build_map main in
   let main_with_trace : Bril.Func.t =
-    insert_into program_path program_args label2first_instr main
+    insert_into program_path program_default_args label2first_instr main
   in
   let program_with_trace =
     main_with_trace
