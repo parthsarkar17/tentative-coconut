@@ -1,4 +1,4 @@
 (executable
  (public_name lesson12)
  (name main)
- (libraries lesson12 unix))
+ (libraries lesson12 unix yojson bril))
