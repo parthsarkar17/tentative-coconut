@@ -26,6 +26,8 @@ let get_trace (interpreter_binary_path : string) (program_path : string)
 
 module StringMap = Map.Make (String)
 
+let bruh x = x
+
 (** Filters a trace to get it ready for insertion back into the Bril program. In
     particular, A) Get rid of Jump instructions, B) Change Branch instructions
     to Guard instructions (If the trace takes the true branch, then the Guard is
